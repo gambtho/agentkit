@@ -381,6 +381,8 @@ The release workflow builds and publishes these images for `linux/amd64` and
 Each image gets the version tag, such as `v0.1.0`. Stable releases also update
 `latest`. Prerelease tags such as `v0.2.0-rc.1` publish versioned images without
 changing `latest` and create a GitHub prerelease.
+Build metadata such as `+build.1` is rejected before publishing to prevent
+collisions between versioned Docker tags.
 
 A GitHub Release with generated notes is created only after all four images
 publish. Publishing uses the repository's `GITHUB_TOKEN`; no separate registry

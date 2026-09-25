@@ -33,6 +33,15 @@ jobs:
           - image: serve-langgraph
             dockerfile: runtimes/langgraph/Dockerfile
     steps:
+      - name: Validate release tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" == *+* ]]; then
+            echo "::error::Release tags must not contain build metadata (+...), which can collide with Docker tags."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -89,8 +98,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           args=(--latest)
-          # A hyphen in build metadata does not make a version a prerelease.
-          if [[ "${TAG%%+*}" == *-* ]]; then
+          if [[ "$TAG" == *-* ]]; then
             args=(--prerelease --latest=false)
           fi
           gh release create "$TAG" --repo "$GH_REPO" --verify-tag \
