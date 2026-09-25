@@ -361,6 +361,31 @@ make build-test-agent RUNTIME=langgraph
 See [`docs/development.md`](docs/development.md) for the full local test and CI
 workflow.
 
+## Release AgentKit
+
+After CI passes for the commit you want to release, push a version tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds and publishes these images for `linux/amd64` and
+`linux/arm64` under `ghcr.io/sozercan/agentkit`:
+
+- `agentkit`, the BuildKit frontend.
+- `serve-pydantic-ai`, the Pydantic AI runtime.
+- `serve-maf`, the Microsoft Agent Framework runtime.
+- `serve-langgraph`, the LangGraph runtime.
+
+Each image gets the version tag, such as `v0.1.0`. Stable releases also update
+`latest`. Prerelease tags such as `v0.2.0-rc.1` publish versioned images without
+changing `latest` and create a GitHub prerelease.
+
+A GitHub Release with generated notes is created only after all four images
+publish. Publishing uses the repository's `GITHUB_TOKEN`; no separate registry
+secret is needed. Builds include SBOM and provenance attestations.
+
 ## More docs
 
 - [`docs/agentkitfile.md`](docs/agentkitfile.md) — Agentkitfile schema and build
