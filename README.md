@@ -371,7 +371,7 @@ workflow.
   adapters, auth, request handling, and tool lifecycle.
 - [`docs/agent-abi.md`](docs/agent-abi.md) — built `/agent/agent.yaml` contract.
 - [`docs/development.md`](docs/development.md) — local development and CI.
-- [Release guide](docs/release.md), publishing images and package setup.
+- [`docs/release.md`](docs/release.md) — publishing images and package setup.
 - [`docs/orka.md`](docs/orka.md) — Orka harness mode and AgentRuntime rendering.
 - [`docs/architecture.md`](docs/architecture.md) — codebase architecture map for
   contributors.
