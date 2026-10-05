@@ -32,6 +32,6 @@ const (
 	// agent ABI kept the generic default port.
 	DefaultFoundryPort = 8088
 
-	// LabelPrefix namespaces all AgentKit OCI labels (ai.<ns>.agentkit.*).
-	LabelPrefix = "ai.orka-agents.agentkit"
+	// LabelPrefix namespaces all AgentKit OCI labels (io.github.<owner>.agentkit.*).
+	LabelPrefix = "io.github.orka-agents.agentkit"
 )
