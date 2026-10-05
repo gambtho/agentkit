@@ -23,9 +23,8 @@ error normalization live in ``agentkit_serve_common.adapter_support``.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from types import TracebackType
-from typing import Any, AsyncIterable, AsyncIterator
+from typing import Any, AsyncIterable
 
 from pydantic_ai import Agent, ModelRetry
 
@@ -46,7 +45,6 @@ try:
 except ImportError:  # pragma: no cover - older dependency set without FastMCP transports
     StdioTransport = None  # type: ignore[assignment]
     StreamableHttpTransport = None  # type: ignore[assignment]
-from pydantic_ai.models import StreamedResponse
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -90,26 +88,20 @@ def validate_supported_spec(spec: AgentSpec) -> None:
         raise AgentBuildError("pydantic-ai runtime does not support context providers")
 
 
-class _OpenAIChatModel(OpenAIChatModel):
-    @asynccontextmanager
-    async def request_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamedResponse]:
-        async with super().request_stream(*args, **kwargs) as response:
-            yield response
-            # EOF alone must not commit partial text or execute partial tool
-            # calls. Check each model response before the agent advances.
-            if not response.cancelled and not (
-                response.finish_reason or (response.provider_details or {}).get("finish_reason")
-            ):
-                raise AgentRunError("Model stream ended before completion")
-
-
 def build_model(spec: AgentSpec) -> OpenAIChatModel:
     """Construct the OpenAI-compatible chat model pointed at ``model.baseURL``."""
     provider = OpenAIProvider(
         base_url=spec.model.base_url,
         api_key=resolve_api_key(spec),
     )
-    return _OpenAIChatModel(spec.model.name, provider=provider)
+    # EOF alone must not commit partial text or execute partial tool calls.
+    # Without this, pydantic-ai (>=2.53) treats a stream that ends without a
+    # finish_reason as 'stop'.
+    return OpenAIChatModel(
+        spec.model.name,
+        provider=provider,
+        profile={"openai_chat_streaming_requires_finish_reason": True},
+    )
 
 
 async def _process_mcp_tool_call(ctx: Any, call_tool: Any, name: str, args: dict[str, Any]) -> Any:
