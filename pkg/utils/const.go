@@ -33,5 +33,5 @@ const (
 	DefaultFoundryPort = 8088
 
 	// LabelPrefix namespaces all AgentKit OCI labels (ai.<ns>.agentkit.*).
-	LabelPrefix = "ai.sozercan.agentkit"
+	LabelPrefix = "ai.orka-agents.agentkit"
 )
