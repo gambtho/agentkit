@@ -138,6 +138,8 @@ func TestValidateRejectsControlPlaneMetadataLabels(t *testing.T) {
 		ImageLabelNativeName,
 		ImageLabelNativeABI,
 		nativeImageLabelNamespace + ".future-control",
+		legacyNativeImageLabelNamespace,
+		legacyNativeImageLabelNamespace + ".runtime",
 		portableImageLabelNamespace,
 		ImageLabelPortableABI,
 		ImageLabelPortableRuntime,
@@ -177,12 +179,13 @@ func TestValidateAllowsUnrelatedMetadataLabels(t *testing.T) {
 		t.Fatalf("parse error: %v", err)
 	}
 	cfg.Metadata.Labels = map[string]string{
-		"com.example/team":                      "agentkit",
-		"org.opencontainers.image.description":  "helpful agent",
-		nativeImageLabelNamespace + "-runtime":  benignNearMissValue,
-		portableImageLabelNamespace + "-custom": benignNearMissValue,
-		orkaImageLabelNamespace + "-tools":      benignNearMissValue,
-		"ai.example.agentkit.runtime":           "unrelated namespace",
+		"com.example/team":                           "agentkit",
+		"org.opencontainers.image.description":       "helpful agent",
+		nativeImageLabelNamespace + "-runtime":       benignNearMissValue,
+		legacyNativeImageLabelNamespace + "-runtime": benignNearMissValue,
+		portableImageLabelNamespace + "-custom":      benignNearMissValue,
+		orkaImageLabelNamespace + "-tools":           benignNearMissValue,
+		"ai.example.agentkit.runtime":                "unrelated namespace",
 	}
 
 	if verr := cfg.Validate(); verr != nil {
