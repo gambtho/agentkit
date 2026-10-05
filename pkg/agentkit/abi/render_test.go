@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/goccy/go-yaml"
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
-	"github.com/sozercan/agentkit/pkg/agentkit/effective"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
+	"github.com/orka-agents/agentkit/pkg/agentkit/effective"
 )
 
 // testAPIKeyEnvName is the NAME of an env var (not a secret). Hoisted to a const

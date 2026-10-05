@@ -10,10 +10,10 @@ import (
 	"github.com/moby/buildkit/exporter/containerimage/exptypes"
 	"github.com/moby/buildkit/frontend/gateway/client"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
+	"github.com/orka-agents/agentkit/pkg/agentkit/effective"
+	agentllb "github.com/orka-agents/agentkit/pkg/agentkit2llb/agent"
 	"github.com/pkg/errors"
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
-	"github.com/sozercan/agentkit/pkg/agentkit/effective"
-	agentllb "github.com/sozercan/agentkit/pkg/agentkit2llb/agent"
 	"golang.org/x/sync/errgroup"
 )
 

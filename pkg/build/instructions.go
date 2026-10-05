@@ -6,8 +6,8 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/dockerui"
 	"github.com/moby/buildkit/frontend/gateway/client"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
 	"github.com/pkg/errors"
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
 )
 
 // contextFileReader is the small seam between authored instruction sources and

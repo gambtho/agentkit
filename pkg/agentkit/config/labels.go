@@ -3,7 +3,7 @@ package config
 import (
 	"strings"
 
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 const (

@@ -109,7 +109,7 @@ var Runtimes = []RuntimeSpec{
 			CapabilityOrkaHarnessV1,
 			CapabilityOrkaObservedTools,
 		},
-		DefaultAdapterRef: "ghcr.io/sozercan/agentkit/serve-pydantic-ai:latest",
+		DefaultAdapterRef: "ghcr.io/orka-agents/agentkit/serve-pydantic-ai:latest",
 	},
 	{
 		Name:    MAF,
@@ -129,7 +129,7 @@ var Runtimes = []RuntimeSpec{
 			CapabilityContextProviderSearch,
 			CapabilityContextProviderMemory,
 		},
-		DefaultAdapterRef: "ghcr.io/sozercan/agentkit/serve-maf:latest",
+		DefaultAdapterRef: "ghcr.io/orka-agents/agentkit/serve-maf:latest",
 	},
 	{
 		Name: LangGraph,
@@ -141,7 +141,7 @@ var Runtimes = []RuntimeSpec{
 			CapabilityOrkaHarnessV1,
 			CapabilityOrkaObservedTools,
 		},
-		DefaultAdapterRef: "ghcr.io/sozercan/agentkit/serve-langgraph:latest",
+		DefaultAdapterRef: "ghcr.io/orka-agents/agentkit/serve-langgraph:latest",
 	},
 }
 

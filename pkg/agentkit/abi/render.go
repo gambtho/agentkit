@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/goccy/go-yaml"
-	"github.com/sozercan/agentkit/pkg/agentkit/effective"
+	"github.com/orka-agents/agentkit/pkg/agentkit/effective"
 )
 
 // Version is the schema version of the baked agent.yaml (docs/agent-abi.md).

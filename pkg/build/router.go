@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/moby/buildkit/frontend/gateway/client"
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
-	"github.com/sozercan/agentkit/pkg/agentkit/runtimes"
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
+	"github.com/orka-agents/agentkit/pkg/agentkit/runtimes"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 // RouteHandler builds a result for a resolved <runtime>/<outputkind> route.

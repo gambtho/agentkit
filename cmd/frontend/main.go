@@ -6,9 +6,9 @@ import (
 	"github.com/moby/buildkit/frontend/gateway/grpcclient"
 	"github.com/moby/buildkit/util/appcontext"
 	"github.com/moby/buildkit/util/bklog"
+	"github.com/orka-agents/agentkit/pkg/agentkit/render"
+	"github.com/orka-agents/agentkit/pkg/build"
 	"github.com/sirupsen/logrus"
-	"github.com/sozercan/agentkit/pkg/agentkit/render"
-	"github.com/sozercan/agentkit/pkg/build"
 	"google.golang.org/grpc/grpclog"
 )
 

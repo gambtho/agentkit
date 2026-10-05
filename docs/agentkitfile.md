@@ -5,7 +5,7 @@ a YAML file with `kind: Agent`, usually named `agentkitfile.yaml` and referenced
 with Docker's `#syntax=` directive.
 
 ```yaml
-#syntax=ghcr.io/sozercan/agentkit/agentkit:latest
+#syntax=ghcr.io/orka-agents/agentkit/agentkit:latest
 apiVersion: v1alpha1
 kind: Agent
 metadata:

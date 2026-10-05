@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"reflect"
 
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
-	"github.com/sozercan/agentkit/pkg/agentkit/runtimes"
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
+	"github.com/orka-agents/agentkit/pkg/agentkit/runtimes"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 // Agent is the effective, build-ready agent description.

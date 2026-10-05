@@ -1,4 +1,4 @@
-module github.com/sozercan/agentkit
+module github.com/orka-agents/agentkit
 
 go 1.25.5
 

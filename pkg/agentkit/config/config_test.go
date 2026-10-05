@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sozercan/agentkit/pkg/agentkit/runtimes"
+	"github.com/orka-agents/agentkit/pkg/agentkit/runtimes"
 )
 
 const (
