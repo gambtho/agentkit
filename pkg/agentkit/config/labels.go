@@ -3,13 +3,16 @@ package config
 import (
 	"strings"
 
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 const (
 	nativeImageLabelNamespace   = utils.LabelPrefix
 	portableImageLabelNamespace = "ai.agentkit"
 	orkaImageLabelNamespace     = "ai.orka"
+	// legacyNativeImageLabelNamespace is the pre-orka-agents native namespace.
+	// It stays reserved so user labels cannot spoof it on newly built images.
+	legacyNativeImageLabelNamespace = "ai.sozercan.agentkit"
 
 	// ImageLabelNativeRuntime identifies the canonical AgentKit runtime.
 	ImageLabelNativeRuntime = nativeImageLabelNamespace + ".runtime"
@@ -36,6 +39,7 @@ const (
 
 var reservedMetadataLabelNamespaces = [...]string{
 	nativeImageLabelNamespace,
+	legacyNativeImageLabelNamespace,
 	portableImageLabelNamespace,
 	orkaImageLabelNamespace,
 }

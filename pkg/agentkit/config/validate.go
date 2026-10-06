@@ -18,8 +18,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/sozercan/agentkit/pkg/agentkit/runtimes"
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/agentkit/runtimes"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 const (

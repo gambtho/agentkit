@@ -13,10 +13,10 @@
 # reads: BUILDKIT_SYNTAX pins the gateway to the local frontend image, and
 # `adapter` overrides the runtime adapter ref (router.go AdapterRef) so the
 # converter uses your freshly-built agentkit-serve:$(TAG) as the LLB base instead
-# of the published ghcr.io/sozercan/agentkit/serve-pydantic-ai:latest default.
+# of the published ghcr.io/orka-agents/agentkit/serve-pydantic-ai:latest default.
 # ────────────────────────────────────────────────────────────────────────────
 
-REGISTRY ?= ghcr.io/sozercan
+REGISTRY ?= ghcr.io/orka-agents
 TAG ?= test
 
 # The agent build must run on a builder that can SEE the locally-built frontend

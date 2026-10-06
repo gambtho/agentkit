@@ -26,4 +26,4 @@ capabilities:
   - mcp-skills
   - context-provider-search
   - context-provider-memory
-adapter: ghcr.io/sozercan/agentkit/serve-maf:latest
+adapter: ghcr.io/orka-agents/agentkit/serve-maf:latest

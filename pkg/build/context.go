@@ -13,8 +13,8 @@ import (
 	"github.com/moby/buildkit/frontend/dockerfile/dfgitutil"
 	"github.com/moby/buildkit/frontend/dockerui"
 	"github.com/moby/buildkit/frontend/gateway/client"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
 	"github.com/pkg/errors"
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
 	"google.golang.org/grpc/status"
 )
 

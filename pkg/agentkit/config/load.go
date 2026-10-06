@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/goccy/go-yaml"
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 // probe is the minimal {apiVersion, kind} discriminator read before full

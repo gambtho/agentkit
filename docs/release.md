@@ -8,7 +8,7 @@ git push origin v0.1.0
 ```
 
 The release workflow builds and publishes these images for `linux/amd64` and
-`linux/arm64` under `ghcr.io/sozercan/agentkit`:
+`linux/arm64` under `ghcr.io/orka-agents/agentkit`:
 
 - `agentkit`, the BuildKit frontend.
 - `serve-pydantic-ai`, the Pydantic AI runtime.

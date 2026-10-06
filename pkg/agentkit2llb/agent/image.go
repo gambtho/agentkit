@@ -6,11 +6,11 @@ import (
 
 	"github.com/moby/buildkit/util/system"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/sozercan/agentkit/pkg/agentkit/abi"
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
-	"github.com/sozercan/agentkit/pkg/agentkit/effective"
-	"github.com/sozercan/agentkit/pkg/agentkit/runtimes"
-	"github.com/sozercan/agentkit/pkg/utils"
+	"github.com/orka-agents/agentkit/pkg/agentkit/abi"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
+	"github.com/orka-agents/agentkit/pkg/agentkit/effective"
+	"github.com/orka-agents/agentkit/pkg/agentkit/runtimes"
+	"github.com/orka-agents/agentkit/pkg/utils"
 )
 
 const (

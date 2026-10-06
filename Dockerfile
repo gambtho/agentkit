@@ -1,7 +1,7 @@
 # The AgentKit frontend image (BuildKit gateway).
 #
 # Referenced as the build syntax of an agentkitfile.yaml:
-#     #syntax=ghcr.io/sozercan/agentkit/agentkit:latest
+#     #syntax=ghcr.io/orka-agents/agentkit/agentkit:latest
 # BuildKit pulls this image and runs /bin/agentkit as the gateway frontend, which
 # turns a `kind: Agent` file into a standard OCI image of a tool-using agent.
 #
@@ -15,8 +15,8 @@ ARG TARGETARCH
 ARG TARGETVARIANT=""
 ARG LDFLAGS
 
-COPY . /go/src/github.com/sozercan/agentkit
-WORKDIR /go/src/github.com/sozercan/agentkit
+COPY . /go/src/github.com/orka-agents/agentkit
+WORKDIR /go/src/github.com/orka-agents/agentkit
 RUN CGO_ENABLED=0 \
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 \
     go build -o /agentkit -ldflags "${LDFLAGS} -w -s -extldflags '-static'" ./cmd/frontend
 
 FROM scratch
-LABEL org.opencontainers.image.source="https://github.com/sozercan/agentkit"
+LABEL org.opencontainers.image.source="https://github.com/orka-agents/agentkit"
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=builder /agentkit /bin/agentkit
 ENTRYPOINT ["/bin/agentkit"]

@@ -83,9 +83,9 @@ def test_current_go_validation_and_renderer_match_python_brokered_description_co
                 "log"
                 "os"
 
-                "github.com/sozercan/agentkit/pkg/agentkit/abi"
-                "github.com/sozercan/agentkit/pkg/agentkit/config"
-                "github.com/sozercan/agentkit/pkg/agentkit/effective"
+                "github.com/orka-agents/agentkit/pkg/agentkit/abi"
+                "github.com/orka-agents/agentkit/pkg/agentkit/config"
+                "github.com/orka-agents/agentkit/pkg/agentkit/effective"
             )
 
             type result struct {

@@ -10,8 +10,8 @@ import (
 
 	"github.com/moby/buildkit/client/llb"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/sozercan/agentkit/pkg/agentkit/abi"
-	"github.com/sozercan/agentkit/pkg/agentkit/effective"
+	"github.com/orka-agents/agentkit/pkg/agentkit/abi"
+	"github.com/orka-agents/agentkit/pkg/agentkit/effective"
 )
 
 // Agentkit2LLB converts an effective Agent to an LLB state and image config. The

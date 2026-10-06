@@ -17,7 +17,7 @@ it anywhere containers run.
 Create `agentkitfile.yaml`:
 
 ```yaml
-#syntax=ghcr.io/sozercan/agentkit/agentkit:latest
+#syntax=ghcr.io/orka-agents/agentkit/agentkit:latest
 apiVersion: v1alpha1
 kind: Agent
 metadata:

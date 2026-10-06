@@ -17,4 +17,4 @@ capabilities:
   - foundry-responses-minimal
   - orka-harness-v1
   - orka-observed-tools
-adapter: ghcr.io/sozercan/agentkit/serve-langgraph:latest
+adapter: ghcr.io/orka-agents/agentkit/serve-langgraph:latest

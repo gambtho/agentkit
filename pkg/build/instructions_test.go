@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sozercan/agentkit/pkg/agentkit/config"
+	"github.com/orka-agents/agentkit/pkg/agentkit/config"
 )
 
 const (
