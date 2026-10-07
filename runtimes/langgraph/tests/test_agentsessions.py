@@ -504,13 +504,13 @@ def test_repeated_cancel_during_sdk_close_keeps_admission_reserved(binding, monk
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("changes", [
-    {"tools": [{"name": "direct", "command": ["not-executed"]}]},
-    {"brokeredTools": [{"name": "brokered", "effect": "read"}]},
-    {"context": {"providers": [{"type": "skills", "source": "filesystem", "path": "/not-read"}]}},
+@pytest.mark.parametrize("changes,expected_message", [
+    ({"tools": [{"name": "direct", "command": ["not-executed"]}]}, "agentsessions rejects baked direct tools"),
+    ({"brokeredTools": [{"name": "brokered", "description": "Read records.", "brokeredClass": "read", "parameters": {"type": "object"}}]}, "agentsessions rejects baked brokeredTools"),
+    ({"context": {"providers": [{"type": "skills", "source": "filesystem", "path": "/agent/skills"}]}}, "agentsessions rejects baked context providers"),
 ])
-def test_unsupported_baked_tools_and_context_are_refused(binding_file, changes):
-    with pytest.raises(AgentsessionsConfigurationError):
+def test_unsupported_baked_tools_and_context_are_refused(binding_file, changes, expected_message):
+    with pytest.raises(AgentsessionsConfigurationError, match=expected_message):
         binding_file(**changes)
 
 
