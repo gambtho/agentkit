@@ -171,6 +171,61 @@ def test_end_releases_admission_before_eof_without_releasing_next_owner(
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("output", [False, True])
+def test_reader_teardown_failure_is_a_safe_failed_end(binding_file, caplog, output):
+    async def check():
+        reader_entered = asyncio.Event()
+
+        async def frames(execution_id):
+            yield h.ControllerFrame(execution_id=execution_id, start=h.Start())
+            try:
+                reader_entered.set()
+                await asyncio.Future()
+            finally:
+                if execution_id == "first":
+                    raise RuntimeError("PRIVATE-PROMPT-CONFIG-TOKEN")
+
+        async def runner(binding, request, exchange):
+            await reader_entered.wait()
+            return RunResult(text="answer") if output else None
+
+        binding = protocol().load_verified_agentsessions_binding(binding_file[0])
+        service = HarnessService(binding, runner=runner)
+        first = service.Connect(frames("first"), None)
+        second = service.Connect(frames("second"), None)
+        try:
+            events = []
+            while True:
+                event = await asyncio.wait_for(anext(first), 2)
+                events.append(event)
+                if event.kind == c.EVENT_END:
+                    break
+            assert [event.kind for event in events] == (
+                [c.EVENT_OUTPUT, c.EVENT_END] if output else [c.EVENT_END]
+            )
+            assert event.end.state == "FAILED"
+            assert event.end.error.code == 13
+            assert event.end.error.description == "execution cleanup failed"
+            assert "PRIVATE" not in str(events) + caplog.text
+            assert not any(record.exc_info for record in caplog.records)
+            assert [record.getMessage() for record in caplog.records].count(
+                "agentsessions execution cleanup failed"
+            ) == 1
+            # The failed END still releases admission without waiting for EOF.
+            next_events = []
+            while True:
+                following = await asyncio.wait_for(anext(second), 2)
+                next_events.append(following)
+                if following.kind == c.EVENT_END:
+                    break
+            assert next_events[-1].end.state == "COMPLETED"
+        finally:
+            await first.aclose()
+            await second.aclose()
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize(
     "owner", ["execution", "reader", "reader-error", "reader-cancel"]
 )
