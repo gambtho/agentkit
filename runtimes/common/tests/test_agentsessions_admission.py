@@ -25,6 +25,8 @@ from test_agentsessions_protocol import live, protocol, text
         ("failure", "FAILED", 13),
         ("cancel", "CANCELED", 1),
         ("cancel-and-complete", "CANCELED", 1),
+        ("reader-error", "FAILED", 13),
+        ("reader-cancel", "CANCELED", 1),
         ("unsupported", "FAILED", 12),
         ("negative-resume", "FAILED", 12),
         ("runner-none", "FAILED", 12),
@@ -34,6 +36,7 @@ from test_agentsessions_protocol import live, protocol, text
 )
 def test_end_releases_admission_before_eof_without_releasing_next_owner(
     binding_file,
+    caplog,
     outcome,
     state,
     code,
@@ -42,6 +45,7 @@ def test_end_releases_admission_before_eof_without_releasing_next_owner(
     async def check():
         exchanges = {}
         execution_entered = asyncio.Event()
+        execution_cleaned = asyncio.Event()
         readers_closed = set()
         streams = []
 
@@ -56,9 +60,12 @@ def test_end_releases_admission_before_eof_without_releasing_next_owner(
                 return RunResult(text="control must win over this output")
             if outcome == "failure":
                 raise RuntimeError("PRIVATE-PROMPT-CONFIG-TOKEN")
-            if outcome == "cancel":
+            if outcome in {"cancel", "reader-error", "reader-cancel"}:
                 execution_entered.set()
-                await asyncio.Future()
+                try:
+                    await asyncio.Future()
+                finally:
+                    execution_cleaned.set()
             if outcome in {"output", "oversized", "invalid-text"}:
                 value = {
                     "output": "answer",
@@ -82,6 +89,14 @@ def test_end_releases_admission_before_eof_without_releasing_next_owner(
                     yield h.ControllerFrame(
                         execution_id=execution_id, cancel=h.Cancel()
                     )
+                if execution_id == "first" and outcome in {
+                    "reader-error",
+                    "reader-cancel",
+                }:
+                    await execution_entered.wait()
+                    if outcome == "reader-cancel":
+                        raise asyncio.CancelledError("PRIVATE-PROMPT-CONFIG-TOKEN")
+                    raise RuntimeError("PRIVATE-PROMPT-CONFIG-TOKEN")
                 await asyncio.Future()
             finally:
                 readers_closed.add(execution_id)
@@ -110,6 +125,15 @@ def test_end_releases_admission_before_eof_without_releasing_next_owner(
                 [c.EVENT_OUTPUT, c.EVENT_END] if outcome == "output" else [c.EVENT_END]
             )
             assert "PRIVATE" not in str(events)
+            assert "PRIVATE" not in caplog.text
+            assert not any(record.exc_info for record in caplog.records)
+            if outcome in {"reader-error", "reader-cancel"}:
+                assert execution_cleaned.is_set()
+                assert event.end.error.description == (
+                    "execution failed"
+                    if outcome == "reader-error"
+                    else "execution canceled"
+                )
 
             # Do not resume/close the first generator until the next reservation
             # is proven live. END, not StopAsyncIteration, is the client barrier.
@@ -147,7 +171,9 @@ def test_end_releases_admission_before_eof_without_releasing_next_owner(
     asyncio.run(check())
 
 
-@pytest.mark.parametrize("owner", ["execution", "reader"])
+@pytest.mark.parametrize(
+    "owner", ["execution", "reader", "reader-error", "reader-cancel"]
+)
 @pytest.mark.parametrize("cleanup_raises", [False, True])
 def test_repeated_handler_cancel_waits_for_owned_cleanup_before_releasing(
     binding_file,
@@ -193,6 +219,14 @@ def test_repeated_handler_cancel_waits_for_owned_cleanup_before_releasing(
                 reader_entered.set()
                 if execution_id == "first" and owner == "execution":
                     yield await controls.get()
+                if execution_id == "first" and owner in {
+                    "reader-error",
+                    "reader-cancel",
+                }:
+                    await execution_entered.wait()
+                    if owner == "reader-cancel":
+                        raise asyncio.CancelledError("PRIVATE-PROMPT-CONFIG-TOKEN")
+                    raise RuntimeError("PRIVATE-PROMPT-CONFIG-TOKEN")
                 await asyncio.Future()
             finally:
                 if execution_id == "first" and owner == "reader":

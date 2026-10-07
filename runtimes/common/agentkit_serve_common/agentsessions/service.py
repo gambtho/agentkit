@@ -205,7 +205,13 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
                 outgoing = asyncio.create_task(exchange.events.get())
             result = None
             if reader.done():
-                end = reader.result()
+                try:
+                    end = reader.result()
+                except asyncio.CancelledError:
+                    end = _end("CANCELED", grpc.StatusCode.CANCELLED, "execution canceled")
+                except Exception:
+                    # Iterator/transport errors can contain private request data.
+                    end = _end("FAILED", grpc.StatusCode.INTERNAL, "execution failed")
                 if not execution.done() and not execution.cancelling():
                     execution.cancel()
                 # A disconnect during awaited teardown must not cancel the

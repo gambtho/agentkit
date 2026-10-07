@@ -167,6 +167,81 @@ def test_sdk_bridge_failure_has_no_retry_or_fallback(binding):
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("control", ["reply", "cancel"])
+def test_actual_sdk_host_wait_has_no_transport_read_deadline(
+    binding, monkeypatch, control,
+):
+    async def check():
+        import httpx
+
+        phases = []
+        expire = asyncio.Event()
+        checked = asyncio.Event()
+        real_send = httpx.AsyncHTTPTransport.handle_async_request
+
+        async def delayed_send(transport, request):
+            timeout = request.extensions["timeout"]
+            phases.append(dict(timeout))
+            response = asyncio.create_task(real_send(transport, request))
+            try:
+                # Accelerate only the transport's finite read-deadline branch;
+                # keep the real SDK, HTTP request and host bridge in the loop.
+                await expire.wait()
+                checked.set()
+                if timeout["read"] is not None:
+                    raise httpx.ReadTimeout("controlled read deadline", request=request)
+                return await response
+            finally:
+                if not response.done():
+                    response.cancel()
+                await asyncio.gather(response, return_exceptions=True)
+
+        monkeypatch.setattr(
+            httpx.AsyncHTTPTransport, "handle_async_request", delayed_send,
+        )
+        async with live(binding) as stub:
+            call = stub.Connect()
+            pending = None
+            try:
+                await call.write(h.ControllerFrame(
+                    execution_id="slow",
+                    start=h.Start(inputs=[text("user", "wait for host")]),
+                ))
+                model = await asyncio.wait_for(call.read(), 5)
+                assert model.kind == c.EVENT_MODEL_CALL
+                pending = asyncio.create_task(call.read())
+                expire.set()
+                await asyncio.wait_for(checked.wait(), 2)
+                assert phases == [{"connect": 5, "read": None, "write": None, "pool": None}]
+                assert not pending.done()
+                if control == "cancel":
+                    await call.write(h.ControllerFrame(
+                        execution_id="slow", cancel=h.Cancel(),
+                    ))
+                else:
+                    await call.write(h.ControllerFrame(
+                        execution_id="slow",
+                        model=h.ModelResult(
+                            model_call_id=model.model.id,
+                            message=text("assistant", "delayed host answer"),
+                        ),
+                    ))
+                end = await asyncio.wait_for(pending, 5)
+                assert end.kind == c.EVENT_END
+                assert end.end.state == ("CANCELED" if control == "cancel" else "COMPLETED")
+                assert await call.read() is grpc.aio.EOF
+                _, ends = await turn(stub, inputs=["next"])
+                assert ends[0].end.state == "COMPLETED"
+            finally:
+                expire.set()
+                call.cancel()
+                if pending is not None:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+
+    asyncio.run(check())
+
+
 def test_empty_host_completion_is_not_retried_or_duplicated(binding):
     async def check():
         async with live(binding) as stub:

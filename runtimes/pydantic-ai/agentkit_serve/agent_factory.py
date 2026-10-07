@@ -281,7 +281,9 @@ async def run_agentsessions(
                 # Explicit Authorization excludes ambient OPENAI_CUSTOM_HEADERS
                 # overrides, including differently cased authorization names.
                 default_headers={"Authorization": "Bearer " + local.token},
-                max_retries=0, timeout=60,
+                # The host owns effect completion/cancellation, not an
+                # unjournaled wall-clock read deadline. Bound loopback connect.
+                max_retries=0, timeout=httpx.Timeout(None, connect=5),
             ) as client:
                 model = OpenAIChatModel(
                     binding.spec.model.name,
