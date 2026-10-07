@@ -430,7 +430,8 @@ jobs:
       - name: Prove keyless agentsessions journal and replay
         run: |
           set -euo pipefail
-          while read -r runtime fixture image; do
+          # Keep runtime rows separate from commands that may consume stdin.
+          while read -r -u 3 runtime fixture image; do
             make build-test-agent TAG=ci BUILDER= RUNTIME="$runtime" \
               FIXTURE="test/agentsessions/$fixture" AGENT_IMAGE="$image"
             AGENTKIT_AGENTSESSIONS_IMAGE="$image" \
@@ -438,7 +439,7 @@ jobs:
             (cd test/agentsessions && \
               AGENTKIT_AGENTSESSIONS_IMAGE="$image" AGENTKIT_AGENTSESSIONS_RUNTIME="$runtime" \
               go test -v -count=1 -run '^TestRunner(SignalCleanup|RuntimeSelection)$' ./...)
-          done <<'RUNTIMES'
+          done 3<<'RUNTIMES'
           pydantic-ai Agentkitfile.yaml agentkit-agentsessions-text:ci
           microsoft-agent-framework Agentkitfile-maf.yaml agentkit-agentsessions-maf-text:ci
           langgraph Agentkitfile-langgraph.yaml agentkit-agentsessions-langgraph-text:ci
