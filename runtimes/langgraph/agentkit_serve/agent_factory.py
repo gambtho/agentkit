@@ -53,6 +53,7 @@ from agentkit_serve_common.adapter_support import (
     split_tool_command,
     upstream_status_code,
 )
+from agentkit_serve_common.agentsessions import ExecutionExchange, VerifiedAgentsessionsBinding
 from agentkit_serve_common.config import AgentSpec, ToolSpec
 from agentkit_serve_common.conversation import RunRequest, ToolCallEvent
 from agentkit_serve_common.runtime import (
@@ -224,6 +225,71 @@ def build_runtime(spec: AgentSpec) -> RuntimeSession:
 def build_agent(spec: AgentSpec) -> LangGraphRuntime:
     """Compatibility alias for wrappers that build an adapter runtime directly."""
     return build_runtime(spec)
+
+
+async def run_agentsessions(
+    binding: VerifiedAgentsessionsBinding, request: RunRequest, exchange: ExecutionExchange,
+) -> None:
+    """Run a fresh text-only graph through the host's per-execution bridge.
+
+    Config remains opaque; the host owns OUTPUT and usage. No normal provider
+    builders, caches, persistence or tracing participate in this execution.
+    """
+    import httpx
+    from langsmith import tracing_context
+    from openai import AsyncOpenAI
+
+    from agentkit_serve_common.agentsessions.bridge import loopback_bridge
+
+    # Empty journal turns are authoritative, unlike the facade's conversion.
+    messages = [
+        HumanMessage(content=turn.text) if turn.role == "user" else AIMessage(content=turn.text)
+        for turn in request.history
+    ]
+    wire_messages = [{"role": turn.role, "content": turn.text} for turn in request.history]
+    if exchange.input_count:
+        messages.append(HumanMessage(content=request.prompt))
+        wire_messages.append({"role": "user", "content": request.prompt})
+    if binding.spec.instructions:
+        wire_messages.insert(0, {"role": "system", "content": binding.spec.instructions})
+
+    async with loopback_bridge(exchange) as local:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as http:
+            async with AsyncOpenAI(
+                base_url=local.base_url, api_key=local.token,
+                organization="", project="", http_client=http,
+                default_headers={"Authorization": "Bearer " + local.token},
+                max_retries=0, timeout=httpx.Timeout(None, connect=5),
+            ) as client:
+                async def local_key() -> str:
+                    return local.token
+
+                # Empty callbacks alone do not disable ambient LangSmith tracing.
+                with tracing_context(enabled=False, parent=False):
+                    model = ChatOpenAI(
+                        model=binding.spec.model.name, base_url=local.base_url,
+                        # A supported async key callback prevents construction of
+                        # an unused, unowned synchronous OpenAI client.
+                        api_key=local_key, async_client=client.chat.completions,
+                        root_async_client=client, openai_proxy="",
+                        cache=False, streaming=False, disable_streaming=True,
+                        stream_usage=False, use_responses_api=False,
+                        # Omitted temperature becomes 1 for o1; the host's strict
+                        # text-only bridge accepts no model sampling options.
+                        temperature=None, callbacks=[], metadata={}, tags=[],
+                        # ChatOpenAI rewrites o-series system roles to developer.
+                        # This fixed adapter-owned text projection restores the
+                        # canonical roles; it is not caller-supplied SDK options.
+                        extra_body={"messages": wire_messages},
+                    )
+                    graph = create_agent(
+                        model=model, tools=[], system_prompt=binding.spec.instructions or None,
+                        checkpointer=None, store=None, cache=None,
+                    )
+                    await graph.ainvoke(
+                        {"messages": messages}, config={"callbacks": [], "metadata": {}, "tags": []},
+                    )
+    return None
 
 
 def _to_messages(request: RunRequest) -> list[BaseMessage]:

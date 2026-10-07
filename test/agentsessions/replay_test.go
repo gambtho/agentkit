@@ -219,6 +219,53 @@ func TestRunnerSignalCleanup(t *testing.T) {
 	}
 }
 
+func TestRunnerRuntimeSelection(t *testing.T) {
+	image := os.Getenv("AGENTKIT_AGENTSESSIONS_IMAGE")
+	if image == "" {
+		t.Skip("built image required for runtime-selectable proof")
+	}
+	runtime := string(docker(t, "image", "inspect", "--format", "{{index .Config.Labels \"io.github.orka-agents.agentkit.runtime\"}}", image))
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	script := filepath.Join(cwd, "../../scripts/agentsessions-e2e.sh")
+	for _, selection := range []string{"unsupported-runtime", "pydantic-ai", "langgraph"} {
+		if selection == runtime {
+			continue
+		}
+		wrong := exec.CommandContext(ctx, script, "--skip-build", selection)
+		wrong.Env = append(os.Environ(), "AGENTKIT_AGENTSESSIONS_IMAGE="+image)
+		if output, err := wrong.CombinedOutput(); err == nil {
+			t.Fatalf("mismatched or unknown runtime must not produce a proof: %s", output)
+		}
+	}
+	cmd := exec.CommandContext(ctx, script, "--skip-build", runtime)
+	cmd.Env = append(os.Environ(), "AGENTKIT_AGENTSESSIONS_IMAGE="+image)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runtime-selectable proof: %v\n%s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if raw, ok := strings.CutPrefix(line, "AGENTSESSIONS_REPLAY_PROOF="); ok {
+			var proof struct {
+				Runtime     string `json:"runtime"`
+				ReplayCalls int    `json:"replay_model_calls"`
+			}
+			if err := json.Unmarshal([]byte(raw), &proof); err != nil {
+				t.Fatal(err)
+			}
+			if proof.Runtime != runtime || proof.ReplayCalls != 0 {
+				t.Fatal("proof must identify the actual runtime and use zero replay calls")
+			}
+			return
+		}
+	}
+	t.Fatal("runner did not emit its replay proof")
+}
+
 func TestContainerStatelessReplay(t *testing.T) {
 	image := os.Getenv("AGENTKIT_AGENTSESSIONS_IMAGE")
 	if image == "" {
@@ -235,6 +282,13 @@ func TestContainerStatelessReplay(t *testing.T) {
 	defer cancel()
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+harnessToken)
 	imageDigest := string(docker(t, "image", "inspect", "--format", "{{.Id}}", image))
+	runtime := string(docker(t, "image", "inspect", "--format", "{{index .Config.Labels \"io.github.orka-agents.agentkit.runtime\"}}", imageDigest))
+	if runtime != "pydantic-ai" && runtime != "microsoft-agent-framework" && runtime != "langgraph" {
+		t.Fatal("image must identify a supported runtime")
+	}
+	if requested := os.Getenv("AGENTKIT_AGENTSESSIONS_RUNTIME"); requested != "" && requested != runtime {
+		t.Fatal("selected proof runtime differs from the immutable image runtime")
+	}
 	// Inspect only this public fixture ABI in a container with no network.
 	abi := docker(t, "run", "--rm", "--label", proofLabel+"="+runID, "--network", "none", "--entrypoint", "/usr/local/bin/python", imageDigest,
 		"-c", "import pathlib,sys; sys.stdout.buffer.write(pathlib.Path('/agent/agent.yaml').read_bytes())")
@@ -388,7 +442,7 @@ func TestContainerStatelessReplay(t *testing.T) {
 	}
 	assertNoProviderCredentials(t, container)
 	proof := map[string]any{
-		"agentsessions_commit": hostPin, "image_digest": imageDigest, "harness_id": desc.ID,
+		"agentsessions_commit": hostPin, "image_digest": imageDigest, "harness_id": desc.ID, "runtime": runtime,
 		"live_model_calls": liveCalls, "journal_model_calls": modelCalls, "journal_outputs": outputCount,
 		"replay_model_calls": replayCalls, "outputs_equal": true, "journal_unchanged": true,
 		"execution_configs_recorded": true, "execution_configs_restored": true,
