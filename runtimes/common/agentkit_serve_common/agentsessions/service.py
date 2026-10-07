@@ -255,6 +255,8 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
             # ClientHarness.Run returns on END and cancels without draining EOF.
             # Finish all owned cleanup and release this reservation before END.
             await cleanup()
+            if cleanup_failed:
+                end = _end("FAILED", grpc.StatusCode.INTERNAL, "execution cleanup failed")
             yield _event(execution_id, kind=common.EVENT_END, end=end)
         finally:
             await cleanup()
