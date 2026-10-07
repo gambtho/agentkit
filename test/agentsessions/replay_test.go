@@ -163,6 +163,9 @@ func TestRunnerSignalCleanup(t *testing.T) {
 	if image == "" {
 		t.Skip("built image required for proof-runner signal cleanup")
 	}
+	runtime := string(docker(t, "image", "inspect", "--format", "{{index .Config.Labels \"io.github.orka-agents.agentkit.runtime\"}}", image))
+	// The image-only invocation must work without CI supplying its selector.
+	t.Setenv("AGENTKIT_AGENTSESSIONS_RUNTIME", "")
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +181,7 @@ func TestRunnerSignalCleanup(t *testing.T) {
 			filter := "label=" + proofLabel + "=" + runID
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, script, "--skip-build")
+			cmd := exec.CommandContext(ctx, script, "--skip-build", runtime)
 			cmd.Env = append(os.Environ(), "AGENTKIT_AGENTSESSIONS_IMAGE="+image, "AGENTKIT_AGENTSESSIONS_RUN_ID="+runID)
 			var output bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &output, &output
