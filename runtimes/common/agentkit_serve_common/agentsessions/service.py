@@ -118,7 +118,7 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
         self.binding = binding
         self.runner = runner
         self.auth_token = auth_token
-        self._active = False
+        self._active: object | None = None
         self._stopping = False
         self._owners: set[asyncio.Task] = set()
         self._idle = asyncio.Event()
@@ -206,20 +206,51 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
             yield _event(execution_id, kind=common.EVENT_END, end=_end("FAILED", grpc.StatusCode.RESOURCE_EXHAUSTED, "an execution is already active"))
             return
         # No await between checking and reserving admission on this asyncio loop.
-        self._active = True
+        reservation = object()
+        self._active = reservation
         self._idle.clear()
         reader = None
         execution = None
         cleanup_failed = False
+        settlement = None
+
+        async def cleanup() -> None:
+            nonlocal settlement, cleanup_failed
+            if settlement is None:
+                tasks = [task for task in (reader, execution) if task is not None]
+                # Retrieve already-failed outcomes even when caller cancellation
+                # preempts result handling; classify cleanup failures separately.
+                cleanup_tasks = [task for task in tasks if not task.done() or task.cancelling()]
+                for task in tasks:
+                    if task.done() and not task.cancelled():
+                        task.exception()
+                    elif not task.done() and not task.cancelling():
+                        task.cancel()
+                settlement = asyncio.create_task(_settle(cleanup_tasks))
+            try:
+                # Reuse the settlement if cancellation sends us through finally:
+                # never cancel a resource owner's teardown a second time.
+                await _wait_for_owner_task(settlement)
+            finally:
+                if not settlement.cancelled() and settlement.result() and not cleanup_failed:
+                    _LOG.error("agentsessions execution cleanup failed")
+                    cleanup_failed = True
+                self._owners.difference_update(task for task in (reader, execution) if task is not None)
+                if self._active is reservation:
+                    self._active = None
+                    self._idle.set()
+
         try:
             try:
                 request = _request(first)
                 if first.start.resume_from_seq < 0:
                     raise _Unsupported("negative resume cursor")
             except _Unsupported:
+                await cleanup()
                 yield _event(execution_id, kind=common.EVENT_END, end=_end("FAILED", grpc.StatusCode.UNIMPLEMENTED, "unsupported Start content"))
                 return
             if self.runner is None:
+                await cleanup()
                 yield _event(execution_id, kind=common.EVENT_END, end=_end("FAILED", grpc.StatusCode.UNIMPLEMENTED, "agentsessions execution is not implemented"))
                 return
             reader = asyncio.create_task(self._read_controls(frames, first))
@@ -228,12 +259,18 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
             await asyncio.wait((reader, execution), return_when=asyncio.FIRST_COMPLETED)
             result = None
             if reader.done():
-                end = reader.result()
+                try:
+                    end = reader.result()
+                except asyncio.CancelledError:
+                    end = _end("CANCELED", grpc.StatusCode.CANCELLED, "execution canceled")
+                except Exception:
+                    # Iterator/transport errors can contain private request data.
+                    end = _end("FAILED", grpc.StatusCode.INTERNAL, "execution failed")
                 if not execution.done() and not execution.cancelling():
                     execution.cancel()
                 # A disconnect during awaited teardown must not cancel the
                 # resource owner's finally block a second time.
-                cleanup_failed = await asyncio.shield(asyncio.create_task(_settle([execution])))
+                cleanup_failed = await _wait_for_owner_task(asyncio.create_task(_settle([execution])))
                 if cleanup_failed:
                     end = _end("FAILED", grpc.StatusCode.INTERNAL, "execution cleanup failed")
             else:
@@ -269,30 +306,14 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
                         end = _end("FAILED", grpc.StatusCode.RESOURCE_EXHAUSTED, "output exceeds message limit")
                     else:
                         yield output
+            # ClientHarness.Run returns on END and cancels without draining EOF.
+            # Finish all owned cleanup and release this reservation before END.
+            await cleanup()
+            if cleanup_failed:
+                end = _end("FAILED", grpc.StatusCode.INTERNAL, "execution cleanup failed")
             yield _event(execution_id, kind=common.EVENT_END, end=end)
         finally:
-            tasks = [task for task in (reader, execution) if task is not None]
-            # Cleanup classification is separate from outcome retrieval: caller
-            # cancellation can preempt result handling for already-failed tasks.
-            cleanup_tasks = [task for task in tasks if not task.done() or task.cancelling()]
-            for task in tasks:
-                if task.done() and not task.cancelled():
-                    task.exception()
-                elif not task.done() and not task.cancelling():
-                    task.cancel()
-            # Hold admission until runner-owned cleanup attempts finish, even if
-            # the handler is canceled again while it awaits them.
-            settlement = asyncio.create_task(_settle(cleanup_tasks))
-            try:
-                await _wait_for_owner_task(settlement)
-            finally:
-                if not settlement.cancelled() and settlement.result() and not cleanup_failed:
-                    # Disconnected streams cannot receive END; still surface one
-                    # fixed diagnosis, without exception text or traceback.
-                    _LOG.error("agentsessions execution cleanup failed")
-                self._owners.difference_update(tasks)
-                self._active = False
-                self._idle.set()
+            await cleanup()
 
 
 def _registered_server(service: HarnessService) -> grpc.aio.Server:
