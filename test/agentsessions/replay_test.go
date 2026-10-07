@@ -28,9 +28,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const hostPin = "b212d498ba52615b5087b2579bdd482809065642"
-const harnessToken = "agentsessions-offline-host-token"
-const proofLabel = "io.github.orka-agents.agentkit.agentsessions-e2e"
+const (
+	hostPin      = "b212d498ba52615b5087b2579bdd482809065642"
+	harnessToken = "agentsessions-offline-host-token"
+	proofLabel   = "io.github.orka-agents.agentkit.agentsessions-e2e"
+)
 
 func docker(t *testing.T, args ...string) []byte {
 	t.Helper()
