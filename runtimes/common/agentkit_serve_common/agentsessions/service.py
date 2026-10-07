@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import signal
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 import grpc
@@ -69,6 +71,20 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
         self.runner = runner
         self.auth_token = auth_token
         self._active: object | None = None
+        self._stopping = False
+        self._owners: set[asyncio.Task] = set()
+        self._idle = asyncio.Event()
+        self._idle.set()
+
+    async def _drain(self) -> None:
+        # Transport termination does not wait for canceled RPC handlers' shielded
+        # execution owners. Keep the loop alive until their cleanup settles.
+        tasks = list(self._owners)
+        for task in tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+        await _settle(tasks)
+        await self._idle.wait()
 
     async def _authenticate(self, context: grpc.aio.ServicerContext) -> None:
         if self.auth_token is None:
@@ -142,12 +158,16 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
             )
             return
         execution_id = first.execution_id
+        if self._stopping:
+            await context.abort(grpc.StatusCode.UNAVAILABLE, "service is shutting down")
+            return
         if self._active:
             yield _event(execution_id, kind=common.EVENT_END, end=_end("FAILED", grpc.StatusCode.RESOURCE_EXHAUSTED, "an execution is already active"))
             return
         # No await between checking and reserving admission on this asyncio loop.
         reservation = object()
         self._active = reservation
+        self._idle.clear()
         reader = None
         execution = None
         outgoing = None
@@ -177,8 +197,10 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
                 if not settlement.cancelled() and settlement.result() and not cleanup_failed:
                     _LOG.error("agentsessions execution cleanup failed")
                     cleanup_failed = True
+                self._owners.difference_update(task for task in (reader, execution) if task is not None)
                 if self._active is reservation:
                     self._active = None
+                    self._idle.set()
 
         try:
             try:
@@ -195,6 +217,7 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
                 return
             reader = asyncio.create_task(self._read_controls(frames, first, exchange))
             execution = asyncio.create_task(_invoke_runner(self.runner, self.binding, request, exchange))
+            self._owners.update((reader, execution))
             outgoing = asyncio.create_task(exchange.events.get())
             while True:
                 await asyncio.wait((reader, execution, outgoing), return_when=asyncio.FIRST_COMPLETED)
@@ -262,6 +285,15 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
             await cleanup()
 
 
+def _registered_server(service: HarnessService) -> grpc.aio.Server:
+    server = grpc.aio.server(options=[
+        ("grpc.max_receive_message_length", MAX_MESSAGE_BYTES),
+        ("grpc.max_send_message_length", MAX_MESSAGE_BYTES),
+    ])
+    harness_pb2_grpc.add_HarnessServicer_to_server(service, server)
+    return server
+
+
 def create_server(
     binding: VerifiedAgentsessionsBinding,
     *,
@@ -269,14 +301,7 @@ def create_server(
     auth_token: str | None = None,
 ) -> grpc.aio.Server:
     """Create a registered, unbound server (call within its owning asyncio loop)."""
-    server = grpc.aio.server(options=[
-        ("grpc.max_receive_message_length", MAX_MESSAGE_BYTES),
-        ("grpc.max_send_message_length", MAX_MESSAGE_BYTES),
-    ])
-    harness_pb2_grpc.add_HarnessServicer_to_server(
-        HarnessService(binding, runner=runner, auth_token=auth_token), server
-    )
-    return server
+    return _registered_server(HarnessService(binding, runner=runner, auth_token=auth_token))
 
 
 async def serve(
@@ -291,18 +316,31 @@ async def serve(
     bind = bind.strip().lower()
     if bind not in {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"} and not auth_token:
         raise ValueError("nonloopback agentsessions bind requires authentication")
-    server = create_server(binding, runner=runner, auth_token=auth_token)
+    service = HarnessService(binding, runner=runner, auth_token=auth_token)
+    server = _registered_server(service)
     host = f"[{bind}]" if ":" in bind else bind
     server.add_insecure_port(f"{host}:{port}")
-    await server.start()
-    termination = asyncio.create_task(server.wait_for_termination())
+    termination = None
     try:
+        await server.start()
+        termination = asyncio.create_task(server.wait_for_termination())
         # gRPC shares its termination future with shutdown. Canceling that
         # future would make stop() fail instead of completing server cleanup.
         await asyncio.shield(termination)
     finally:
-        await _wait_for_owner_task(asyncio.create_task(server.stop(0)))
-        await _wait_for_owner_task(termination)
+        # Close admission before yielding to stop(). One shielded lifecycle owner
+        # must finish every shutdown step, even if serve is canceled again.
+        service._stopping = True
+
+        async def shutdown() -> None:
+            try:
+                await server.stop(0)
+                if termination is not None:
+                    await termination
+            finally:
+                await service._drain()
+
+        await _wait_for_owner_task(asyncio.create_task(shutdown()))
 
 
 def run(
@@ -314,4 +352,40 @@ def run(
     runner: ExecutionRunner | None = None,
 ) -> None:
     """Synchronous CLI entrypoint; does not receive a default RuntimeFactory."""
-    asyncio.run(serve(binding, bind=bind, port=port, auth_token=auth_token, runner=runner))
+    received_signal: int | None = None
+
+    async def main() -> None:
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        previous_handlers = {}
+
+        def request_shutdown(signum: int) -> None:
+            nonlocal received_signal
+            if received_signal is None:
+                received_signal = signum
+                task.cancel()
+
+        try:
+            # Embedded serve never owns process signals. Synchronous run may also
+            # be embedded off the main thread or on a loop without signal support.
+            if threading.current_thread() is threading.main_thread():
+                for signum in (signal.SIGINT, signal.SIGTERM):
+                    previous = signal.getsignal(signum)
+                    try:
+                        loop.add_signal_handler(signum, request_shutdown, signum)
+                    except (NotImplementedError, RuntimeError, ValueError):
+                        continue
+                    previous_handlers[signum] = previous
+            await serve(binding, bind=bind, port=port, auth_token=auth_token, runner=runner)
+        finally:
+            for signum, previous in previous_handlers.items():
+                loop.remove_signal_handler(signum)
+                signal.signal(signum, previous)
+
+    try:
+        asyncio.run(main())
+    except asyncio.CancelledError:
+        if received_signal == signal.SIGINT:
+            raise KeyboardInterrupt from None
+        if received_signal != signal.SIGTERM:
+            raise
