@@ -55,7 +55,7 @@ def test_direct_server_accepts_case_insensitive_loopback(binding_file, monkeypat
             return port
 
         monkeypatch.setattr(server, "add_insecure_port", add_port)
-        monkeypatch.setattr(service, "create_server", lambda *args, **kwargs: server)
+        monkeypatch.setattr(service, "_registered_server", lambda _: server)
         running = asyncio.create_task(service.serve(binding, bind=bind, port=0))
         try:
             await asyncio.wait((running, bound), return_when=asyncio.FIRST_COMPLETED)
