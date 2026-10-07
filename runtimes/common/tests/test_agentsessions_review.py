@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import traceback
 
 import grpc
 import pytest
+import yaml
 
 from agentkit_serve_common.agentsessions import service
 from agentkit_serve_common.agentsessions._generated import harness_pb2, harness_pb2_grpc
@@ -20,6 +22,22 @@ def test_programmatic_binding_error_traceback_hides_invalid_yaml(binding_file):
     diagnostic = "".join(traceback.format_exception(caught.value))
     assert marker not in diagnostic
     assert "cannot load agentsessions agent configuration" in diagnostic
+
+
+def test_programmatic_binding_error_traceback_hides_invalid_model_url(binding_file, monkeypatch):
+    path, data = binding_file
+    marker = "PRIVATE_URL_MARKER"
+    data["model"]["baseURL"] = "https://[" + marker + "]/v1"
+    path.write_text(yaml.safe_dump(data))
+    monkeypatch.setenv(
+        "AGENTKIT_AGENTSESSIONS_AGENT_CONFIGURATION_DIGEST",
+        "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+    with pytest.raises(protocol().AgentsessionsConfigurationError) as caught:
+        protocol().load_verified_agentsessions_binding(path)
+    diagnostic = "".join(traceback.format_exception(caught.value))
+    assert marker not in diagnostic
+    assert "credential-bearing model URLs" in diagnostic
 
 
 @pytest.mark.parametrize("bind", ["LOCALHOST", " Localhost "])

@@ -69,6 +69,6 @@ def load_verified_agentsessions_binding(path: str | Path) -> VerifiedAgentsessio
         url = urlsplit(spec.model.base_url)
         if url.username is not None or url.password is not None or url.query or url.fragment:
             raise ValueError("credential-bearing URL")
-    except ValueError as exc:
-        raise AgentsessionsConfigurationError("agentsessions rejects credential-bearing model URLs") from exc
+    except ValueError:
+        raise AgentsessionsConfigurationError("agentsessions rejects credential-bearing model URLs") from None
     return VerifiedAgentsessionsBinding(spec, configuration_digest, implementation_digest)
