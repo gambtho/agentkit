@@ -87,7 +87,18 @@ and cancellation clean up owned resources and release admission **before** END,
 so a new turn may start at END without draining EOF. Cancel, repeated
 cancellation, EOF/half-close and disconnect settle owned cleanup; exactly one
 safe END is emitted where writable. No delivery/availability claim is made for
-an unwritable transport.
+an unwritable transport. A detected cleanup failure produces a safe
+`FAILED/INTERNAL` END where writable, never a successful terminal status.
+
+On a main-thread POSIX event loop with signal support, the CLI owns SIGINT and
+SIGTERM while serving. The first signal closes admission and stops the gRPC
+transport, then waits for execution-owned teardown before the event loop exits.
+SIGTERM returns normally; SIGINT raises `KeyboardInterrupt` after cleanup.
+Further SIGINT/SIGTERM signals do not interrupt that drain, and prior handlers
+are restored afterward. Embedded async `serve()` does not install signal
+handlers; off-thread or unsupported-loop callers retain their prior signal
+behavior. Cleanup has no forced deadline: deployment grace periods and
+uncatchable SIGKILL can still terminate the process before teardown finishes.
 
 ModelResult must correlate to the single pending call. Unsolicited/duplicate or
 mismatched replies, missing message payloads, non-assistant/nontext content,
