@@ -21,7 +21,7 @@ def test_pinned_go_client_uses_python_native_harness(binding_file, tmp_path):
         p = protocol()
         from agentkit_serve_common.runtime import RunResult
         seen = []
-        async def runner(binding, request):
+        async def runner(binding, request, exchange):
             seen.append(request)
             assert request.config == b"\x00go-config\xff"
             assert request.prompt == "from Go"
