@@ -46,9 +46,10 @@ def load_verified_agentsessions_binding(path: str | Path) -> VerifiedAgentsessio
     """
     try:
         spec, raw = load_with_bytes(path)
-    except ConfigError as exc:
-        # YAML parse diagnostics may include snippets of sensitive input.
-        raise AgentsessionsConfigurationError("cannot load agentsessions agent configuration") from exc
+    except ConfigError:
+        # Suppress parser chaining even for callers outside the CLI: tracebacks
+        # must not expose YAML snippets or values from the invalid input.
+        raise AgentsessionsConfigurationError("cannot load agentsessions agent configuration") from None
     configuration_digest = _digest_from_env(AGENT_CONFIGURATION_DIGEST_ENV)
     actual = "sha256:" + hashlib.sha256(raw).hexdigest()
     if not secrets.compare_digest(configuration_digest, actual):

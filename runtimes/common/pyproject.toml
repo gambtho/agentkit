@@ -21,8 +21,8 @@ dependencies = [
     "pyyaml>=6.0",
     "httpx>=0.28",
     # Runtime wheels only; stub compiler pins live in scripts/ separately.
-    "grpcio==1.78.0",
-    "protobuf==6.31.1",
+    "grpcio>=1.78.0,<2",
+    "protobuf>=6.31.1,<7",
 ]
 
 [project.scripts]

@@ -48,6 +48,7 @@ def test_cli_nonloopback_requires_auth(binding_file, monkeypatch, bind, token):
     monkeypatch.setattr(cli, "run_agentsessions", lambda *args, **kwargs: captured.append(kwargs), raising=False)
     monkeypatch.setenv("AGENTKIT_BIND", bind)
     monkeypatch.delenv("AGENTKIT_PORT", raising=False)
+    monkeypatch.delenv("AGENTKIT_PROTOCOL", raising=False)
     if token:
         monkeypatch.setenv("AGENTKIT_AUTH_TOKEN", token)
         cli.run(ProviderTrap(), ["--config", str(binding_file[0]), "--protocol", "agentsessions"])
@@ -69,5 +70,6 @@ def test_cli_passes_only_explicit_agentsessions_runner(binding_file, monkeypatch
     monkeypatch.setattr(cli, "run_agentsessions", lambda *args, **kwargs: captured.update(kwargs), raising=False)
     monkeypatch.setenv("AGENTKIT_BIND", "127.0.0.1")
     monkeypatch.delenv("AGENTKIT_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTKIT_PROTOCOL", raising=False)
     cli.run(factory, ["--config", str(binding_file[0]), "--protocol", "agentsessions"])
     assert captured["runner"] == factory.run_agentsessions

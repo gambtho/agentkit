@@ -110,8 +110,8 @@ forwarding, HTTP bridge, model retry or tool mediation is present here.
 
 `runtimes/common/agentkit_serve_common/agentsessions/` contains the exact proto
 inputs, upstream Apache-2.0 license, source hash/provenance manifest and generated
-Python stubs. Runtime pins are separate from compiler-only requirements in
-`scripts/agentsessions-generator-requirements.txt`.
+Python stubs. Runtime compatibility bounds are separate from exact compiler pins
+in `scripts/agentsessions-generator-requirements.txt`.
 
 ```sh
 scripts/generate-agentsessions-stubs.sh --fetch  # fetch exact pinned inputs, verify hashes, generate

@@ -298,16 +298,21 @@ async def serve(
     runner: ExecutionRunner | None = None,
 ) -> None:
     """Serve h2c; nonloopback requires auth AND deployment-private networking."""
+    bind = bind.strip().lower()
     if bind not in {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"} and not auth_token:
         raise ValueError("nonloopback agentsessions bind requires authentication")
     server = create_server(binding, runner=runner, auth_token=auth_token)
     host = f"[{bind}]" if ":" in bind else bind
     server.add_insecure_port(f"{host}:{port}")
     await server.start()
+    termination = asyncio.create_task(server.wait_for_termination())
     try:
-        await server.wait_for_termination()
+        # gRPC shares its termination future with shutdown. Canceling that
+        # future would make stop() fail instead of completing server cleanup.
+        await asyncio.shield(termination)
     finally:
-        await server.stop(0)
+        await _wait_for_owner_task(asyncio.create_task(server.stop(0)))
+        await _wait_for_owner_task(termination)
 
 
 def run(
