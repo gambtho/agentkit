@@ -7,7 +7,7 @@ import logging
 import secrets
 import signal
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
 import grpc
 
@@ -316,13 +316,98 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
             await cleanup()
 
 
+class _ManagedServer(grpc.aio.Server):
+    """Preserve the gRPC server API while owning execution cleanup on shutdown."""
+
+    def __init__(self, server: grpc.aio.Server, service: HarnessService) -> None:
+        self._server = server
+        self._service = service
+        self._draining: asyncio.Task[None] | None = None
+        self._termination: asyncio.Task[None] | None = None
+        self._started = False
+        self._stopped: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    def add_generic_rpc_handlers(self, generic_rpc_handlers: Sequence[grpc.GenericRpcHandler]) -> None:
+        self._server.add_generic_rpc_handlers(generic_rpc_handlers)
+
+    def add_registered_method_handlers(
+        self, service_name: str, method_handlers: dict[str, grpc.RpcMethodHandler]
+    ) -> None:
+        self._server.add_registered_method_handlers(service_name, method_handlers)
+
+    def add_insecure_port(self, address: str) -> int:
+        return self._server.add_insecure_port(address)
+
+    def add_secure_port(self, address: str, server_credentials: grpc.ServerCredentials) -> int:
+        return self._server.add_secure_port(address, server_credentials)
+
+    async def start(self) -> None:
+        if self._service._stopping:
+            raise grpc.aio.UsageError("server is shutting down")
+        # Own shutdown even if cancellation preempts native startup completion.
+        self._started = True
+        await self._server.start()
+
+    async def _drain(self) -> None:
+        if self._draining is None:
+            self._draining = asyncio.create_task(self._service._drain())
+        await _wait_for_owner_task(self._draining)
+
+    async def stop(self, grace: float | None) -> None:
+        if not self._started:
+            # Native stop is a no-op before the first start. In particular, do
+            # not close admission or cancel a pre-start termination monitor.
+            await self._server.stop(grace)
+            return
+        self._service._stopping = True
+
+        async def shutdown() -> None:
+            try:
+                await self._server.stop(grace)
+            finally:
+                await self._drain()
+            if not self._stopped.done():
+                self._stopped.set_result(None)
+            if self._termination is not None:
+                # Transport and execution cleanup are complete; retire the
+                # monitor without retaining a second lifecycle owner.
+                if not self._termination.done():
+                    self._termination.cancel()
+                await asyncio.gather(self._termination, return_exceptions=True)
+
+        # A canceled stop caller must still wait until resource owners settle.
+        # Separate transport stop calls preserve gRPC's most-restrictive grace.
+        await _wait_for_owner_task(asyncio.create_task(shutdown()))
+
+    async def wait_for_termination(self, timeout: float | None = None) -> bool:
+        if self._stopped.done():
+            return False
+        if self._termination is None:
+            async def terminated() -> None:
+                await self._server.wait_for_termination()
+                self._service._stopping = True
+                await self._drain()
+
+            self._termination = asyncio.create_task(terminated())
+        # A timeout or canceled waiter must not cancel gRPC's shared termination
+        # future or the resource drain. Completion includes execution cleanup.
+        done, _ = await asyncio.wait(
+            (self._termination, self._stopped), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+        )
+        if not done:
+            return True
+        if not self._stopped.done():
+            self._termination.result()
+        return False
+
+
 def _registered_server(service: HarnessService) -> grpc.aio.Server:
     server = grpc.aio.server(options=[
         ("grpc.max_receive_message_length", MAX_MESSAGE_BYTES),
         ("grpc.max_send_message_length", MAX_MESSAGE_BYTES),
     ])
     harness_pb2_grpc.add_HarnessServicer_to_server(service, server)
-    return server
+    return _ManagedServer(server, service)
 
 
 def create_server(
@@ -331,7 +416,7 @@ def create_server(
     runner: ExecutionRunner | None = None,
     auth_token: str | None = None,
 ) -> grpc.aio.Server:
-    """Create a registered, unbound server (call within its owning asyncio loop)."""
+    """Create an unbound server in its asyncio loop, with managed shutdown."""
     return _registered_server(HarnessService(binding, runner=runner, auth_token=auth_token))
 
 
