@@ -318,3 +318,62 @@ def test_create_server_immediate_stop_shortens_concurrent_graceful_stop(binding_
             ) is False
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("secure", [False, True])
+@pytest.mark.parametrize("address", ["0.0.0.0:0", "[::]:0", "example.invalid:0", "::1:8080", "::ffff:127.0.0.1:8080"])
+@pytest.mark.parametrize("auth_token", [None, "", "test-bind-token"])
+def test_create_server_port_binding_requires_nonloopback_auth(binding_file, monkeypatch, secure, address, auth_token):
+    async def check():
+        from agentkit_serve_common.agentsessions import service
+
+        native = grpc.aio.server()
+        delegated = []
+        credentials = object()
+
+        def bind(address, *args):
+            delegated.append((address, args))
+            return 12345
+
+        # Inspect delegation without exposing a listener on the test machine.
+        monkeypatch.setattr(native, "add_insecure_port", bind)
+        monkeypatch.setattr(native, "add_secure_port", bind)
+        monkeypatch.setattr(grpc.aio, "server", lambda **kwargs: native)
+        server = service.create_server(
+            protocol().load_verified_agentsessions_binding(binding_file[0]), auth_token=auth_token
+        )
+        try:
+            if secure:
+                operation = lambda: server.add_secure_port(address, credentials)
+            else:
+                operation = lambda: server.add_insecure_port(address)
+            if auth_token:
+                assert operation() == 12345
+                assert delegated == [(address, (credentials,) if secure else ())]
+            else:
+                with pytest.raises(ValueError, match="authentication"):
+                    operation()
+                assert delegated == []
+        finally:
+            await server.stop(0)
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1:0", "LOCALHOST:0", "[::1]:0", "[::ffff:127.0.0.1]:0", "::1", "::ffff:127.0.0.1", "unix:/local-test.sock", "unix-abstract:local-test"])
+def test_create_server_local_port_binding_remains_keyless(binding_file, monkeypatch, address):
+    async def check():
+        from agentkit_serve_common.agentsessions import service
+
+        native = grpc.aio.server()
+        delegated = []
+        monkeypatch.setattr(native, "add_insecure_port", lambda address: delegated.append(address) or 12345)
+        monkeypatch.setattr(grpc.aio, "server", lambda **kwargs: native)
+        server = service.create_server(protocol().load_verified_agentsessions_binding(binding_file[0]))
+        try:
+            assert server.add_insecure_port(address) == 12345
+            assert delegated == [address]
+        finally:
+            await server.stop(0)
+
+    asyncio.run(check())

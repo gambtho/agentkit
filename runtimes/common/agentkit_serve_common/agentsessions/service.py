@@ -20,6 +20,7 @@ from ._generated import harness_pb2_grpc
 from .binding import VerifiedAgentsessionsBinding
 
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"})
 _LOG = logging.getLogger(__name__)
 # A fresh, explicitly supplied async execution hook. It owns any per-Start
 # resources and must close them under cancellation. Never use build_runtime.
@@ -335,10 +336,29 @@ class _ManagedServer(grpc.aio.Server):
     ) -> None:
         self._server.add_registered_method_handlers(service_name, method_handlers)
 
+    def _check_bind(self, address: str) -> None:
+        # Unix sockets are local, like loopback; other address forms fail closed.
+        if address.startswith(("unix:", "unix-abstract:")):
+            return
+        host = address.lower()
+        if host not in _LOOPBACK_HOSTS:
+            prefix = address.rpartition(":")[0]
+            if address.startswith("[") and prefix.endswith("]"):
+                host = prefix[1:-1].lower()
+            elif address.count(":") == 1:
+                host = prefix.lower()
+            else:
+                # Bare IPv6 is the entire host, not loopback plus a port.
+                host = ""
+        if host not in _LOOPBACK_HOSTS and not self._service.auth_token:
+            raise ValueError("nonloopback agentsessions bind requires authentication")
+
     def add_insecure_port(self, address: str) -> int:
+        self._check_bind(address)
         return self._server.add_insecure_port(address)
 
     def add_secure_port(self, address: str, server_credentials: grpc.ServerCredentials) -> int:
+        self._check_bind(address)
         return self._server.add_secure_port(address, server_credentials)
 
     async def start(self) -> None:
@@ -430,7 +450,7 @@ async def serve(
 ) -> None:
     """Serve h2c; nonloopback requires auth AND deployment-private networking."""
     bind = bind.strip().lower()
-    if bind not in {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"} and not auth_token:
+    if bind not in _LOOPBACK_HOSTS and not auth_token:
         raise ValueError("nonloopback agentsessions bind requires authentication")
     service = HarnessService(binding, runner=runner, auth_token=auth_token)
     server = _registered_server(service)
