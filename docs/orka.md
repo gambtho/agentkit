@@ -108,8 +108,8 @@ Run the shared offline/live entrypoint from the AgentKit checkout:
 scripts/orka-harness-v2-e2e.sh offline
 scripts/orka-harness-v2-e2e.sh offline microsoft-agent-framework
 
-# Live uses Microsoft Agent Framework and existing local Vekil authentication.
-VEKIL_CACHE_DIR="$HOME/.config/vekil" scripts/orka-harness-v2-e2e.sh live
+# Live uses Microsoft Agent Framework and a bundled local AIKit model.
+scripts/orka-harness-v2-e2e.sh live
 ```
 
 Run in a Linux shell on the Docker daemon's host so the runner and daemon share
@@ -146,15 +146,16 @@ A passing offline run requires these observable results:
 - wrong authentication, fences, model, or config identity start no unauthorized
   provider/tool work, and session cleanup removes the child and private paths.
 
-Live mode uses Copilot through
-`ghcr.io/sozercan/vekil:v0.14.10@sha256:656eb73f6eeea2ca0c1277cdd7bb8eede72efc5cac2450cdc30a3b94bda44d4b`.
-Supply `COPILOT_GITHUB_TOKEN` through the environment, or leave it unset and use
-`VEKIL_CACHE_DIR` for an existing local auth cache. The live assertions require a
-real model response, an MCP tool receipt, and a second successful prompt in the
-same session. Offline scenarios remain the deterministic lifecycle checks.
-Configured authentication, readiness, and inference errors fail the live run.
-CI reports an explicit skip when repository secret access is unavailable; that
-skip is not evidence of live coverage.
+Live mode runs `ghcr.io/kaito-project/aikit/qwen3.5:2b`, pinned by digest in
+`scripts/aikit-e2e-common.sh`, directly on the run-owned run-owned Docker network.
+It requires no provider credentials and makes no external inference calls.
+`test/aikit-e2e/model.yaml` configures bounded CPU inference, greedy sampling,
+and native tool templates. The runner warms the model before the timed turns.
+The live assertions require a real model response, an MCP tool receipt, a second
+successful prompt in the same session, and cancellation during a blocking tool.
+Offline scenarios remain the deterministic failure and deadline checks.
+Readiness and inference errors fail the live run; CI does not skip live coverage
+based on repository secrets.
 
 Set `ARTIFACT_DIR` to retain sanitized JSON results, for example:
 

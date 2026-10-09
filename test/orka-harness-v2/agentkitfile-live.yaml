@@ -8,7 +8,7 @@ model:
   provider: openai-compatible
   # ACP must replace this with the supervisor's authenticated loopback proxy.
   baseURL: http://provider.invalid/v1
-  name: claude-haiku-4.5
+  name: qwen-3.5-2b
   apiKeyEnv: OPENAI_API_KEY
 instructions: |
   Follow the user's requested marker and tool instructions exactly.

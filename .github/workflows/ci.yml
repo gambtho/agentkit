@@ -39,7 +39,9 @@ jobs:
       - name: Validate GitHub Actions and shell syntax
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
-          bash -n scripts/live-copilot-agent-e2e.sh
+          bash -n scripts/live-aikit-agent-e2e.sh
+          bash -n scripts/aikit-e2e-common.sh
+          shellcheck scripts/live-aikit-agent-e2e.sh scripts/aikit-e2e-common.sh
           bash -n scripts/orka-harness-v2-e2e.sh
           shellcheck scripts/orka-harness-v2-e2e.sh
           bash -n scripts/generate-agentsessions-stubs.sh
@@ -418,50 +420,18 @@ jobs:
           smoke agentkit-smoke-langgraph langgraph-agent:ci 18082
           orka_smoke agentkit-smoke-orka hello-agent:ci 18083
 
-  live-copilot-e2e:
-    name: Live Vekil/Copilot E2E
+  live-aikit-e2e:
+    name: Live AIKit E2E
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-      VEKIL_IMAGE: ghcr.io/sozercan/vekil:v0.14.10@sha256:656eb73f6eeea2ca0c1277cdd7bb8eede72efc5cac2450cdc30a3b94bda44d4b
+      PLATFORM: linux/amd64
+      BUILDER: ""
     steps:
-      - name: Decide whether live Vekil/Copilot E2E can run
-        id: gate
-        env:
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork || false }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ "${IS_FORK}" = "true" ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "reason=Skipping live Vekil/Copilot E2E for fork pull requests because repository secrets are not exposed." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "${ACTOR}" = "dependabot[bot]" ] && [ -z "${COPILOT_GITHUB_TOKEN}" ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "reason=Skipping live Vekil/Copilot E2E for Dependabot pull requests because repository secrets are not exposed." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -z "${COPILOT_GITHUB_TOKEN}" ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "reason=Skipping live Vekil/Copilot E2E because COPILOT_GITHUB_TOKEN is not configured for this run." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "run=true" >> "$GITHUB_OUTPUT"
-
-      - name: Explain skipped live Vekil/Copilot E2E
-        if: steps.gate.outputs.run != 'true'
-        run: echo "${{ steps.gate.outputs.reason }}"
-
       - name: Checkout
-        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Free disk space for Docker-heavy live E2E
-        if: steps.gate.outputs.run == 'true'
         run: |
           set -euxo pipefail
           echo "Disk usage before cleanup"
@@ -483,14 +453,12 @@ jobs:
           docker system df || true
 
       - name: Setup Go
-        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Setup Docker daemon with containerd image store
-        if: steps.gate.outputs.run == 'true'
         uses: docker/setup-docker-action@e61617a16c407a86262fb923c35a616ddbe070b3 # v4.6.0
         with:
           daemon-config: |
@@ -501,15 +469,13 @@ jobs:
             }
 
       - name: Configure Docker Buildx daemon builder
-        if: steps.gate.outputs.run == 'true'
         run: |
           docker buildx version
           docker buildx inspect --bootstrap
           echo "BUILDER=" >> "$GITHUB_ENV"
 
-      - name: Run live Vekil-backed AgentKit E2E
-        if: steps.gate.outputs.run == 'true'
-        run: bash scripts/live-copilot-agent-e2e.sh
+      - name: Run live AIKit-backed AgentKit E2E
+        run: bash scripts/live-aikit-agent-e2e.sh
 
   orka-v2-offline:
     name: Harness v2 E2E (${{ matrix.adapter }})
@@ -559,54 +525,23 @@ jobs:
           retention-days: 7
 
   orka-v2-live:
-    name: Live harness v2 E2E (microsoft-agent-framework)
+    name: Live AIKit harness v2 E2E (microsoft-agent-framework)
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
       PLATFORM: linux/amd64
       BUILDER: ""
     steps:
-      - name: Decide whether live harness v2 E2E can run
-        id: gate
-        env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork || false }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$IS_FORK" = true ]; then
-            echo 'run=false' >> "$GITHUB_OUTPUT"
-            echo 'reason=Skipped live harness v2 E2E for a fork pull request; repository secrets are unavailable. No live scenarios executed.' >> "$GITHUB_OUTPUT"
-          elif [ "$ACTOR" = 'dependabot[bot]' ] && [ -z "$COPILOT_GITHUB_TOKEN" ]; then
-            echo 'run=false' >> "$GITHUB_OUTPUT"
-            echo 'reason=Skipped live harness v2 E2E for Dependabot; repository secrets are unavailable. No live scenarios executed.' >> "$GITHUB_OUTPUT"
-          elif [ -z "$COPILOT_GITHUB_TOKEN" ]; then
-            echo 'run=false' >> "$GITHUB_OUTPUT"
-            echo 'reason=Skipped live harness v2 E2E because COPILOT_GITHUB_TOKEN is not configured. No live scenarios executed.' >> "$GITHUB_OUTPUT"
-          else
-            echo 'run=true' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Explain skipped live harness v2 coverage
-        if: steps.gate.outputs.run != 'true'
-        env:
-          SKIP_REASON: ${{ steps.gate.outputs.reason }}
-        run: |
-          printf '%s\n' "$SKIP_REASON"
-          printf '%s\n' "$SKIP_REASON" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Checkout
-        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Go
-        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: test/orka-harness-v2/probe/go.mod
           cache: true
 
       - name: Setup Docker daemon with containerd image store
-        if: steps.gate.outputs.run == 'true'
         uses: docker/setup-docker-action@e61617a16c407a86262fb923c35a616ddbe070b3 # v4.6.0
         with:
           daemon-config: |
@@ -617,15 +552,13 @@ jobs:
             }
 
       - name: Run live composed harness v2 E2E
-        if: steps.gate.outputs.run == 'true'
         timeout-minutes: 65
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           ARTIFACT_DIR: ${{ runner.temp }}/agentkit-orka-v2-live
         run: bash scripts/orka-harness-v2-e2e.sh live
 
       - name: Upload safe live harness v2 results
-        if: always() && steps.gate.outputs.run == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: orka-v2-live-microsoft-agent-framework

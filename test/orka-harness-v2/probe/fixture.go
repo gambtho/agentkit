@@ -239,7 +239,7 @@ func (f *fixture) forward(w http.ResponseWriter, r *http.Request, body []byte) {
 		return
 	}
 	upstream.Header.Set("Content-Type", "application/json")
-	// Vekil owns the Copilot credential. The fixture never reads or records it.
+	// AIKit runs on the private test network and requires no provider credential.
 	response, err := f.client.Do(upstream)
 	if err != nil {
 		f.reject(w, "live provider transport failed")
