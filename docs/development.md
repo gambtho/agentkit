@@ -139,7 +139,7 @@ daemon-backed Buildx builder and Go matching the pinned Orka module, currently G
 no pre-existing Orka checkout is needed. `BUILDER` selects the builder, and
 `PLATFORM` defaults to the Docker daemon's Linux amd64/arm64 architecture. Allow
 network access for registry images and build dependencies. The model is bundled
-in the AIKit image; live inference runs on an run-owned Docker network without
+in the AIKit image; live inference runs on a run-owned Docker network without
 external API credentials.
 
 Set `ARTIFACT_DIR` to keep safe JSON results with the adapter, scenario, source

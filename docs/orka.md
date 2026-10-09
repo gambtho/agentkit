@@ -147,7 +147,7 @@ A passing offline run requires these observable results:
   provider/tool work, and session cleanup removes the child and private paths.
 
 Live mode runs `ghcr.io/kaito-project/aikit/qwen3.5:2b`, pinned by digest in
-`scripts/aikit-e2e-common.sh`, directly on the run-owned run-owned Docker network.
+`scripts/aikit-e2e-common.sh`, directly on the run-owned Docker network.
 It requires no provider credentials and makes no external inference calls.
 `test/aikit-e2e/model.yaml` configures bounded CPU inference, greedy sampling,
 and native tool templates. The runner warms the model before the timed turns.
