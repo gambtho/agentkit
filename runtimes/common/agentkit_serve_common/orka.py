@@ -22,6 +22,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -1412,6 +1413,15 @@ def create_orka_app(
     async def _http_exc_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # Orka's native error body is {"error": message} (harness.WriteError).
         return JSONResponse({"error": str(exc.detail)}, status_code=exc.status_code, headers=exc.headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_exc_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default body echoes the rejected input; name the field only,
+        # with the same status as the adapter's own request validation.
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in exc.errors()
+        )
+        return JSONResponse({"error": problems or "invalid request"}, status_code=400)
 
     @app.get("/v1/health")
     async def health() -> dict[str, Any]:

@@ -578,6 +578,23 @@ def test_orka_duplicate_turn_rejection_matches_orka_conformance_contract():
     assert completed_duplicate.json() == {"error": "turn already completed"}
 
 
+def test_orka_parameter_validation_uses_native_error_body():
+    app = create_orka_app(_spec(), EchoFactory(), auth_token="test-token")
+
+    with TestClient(app) as client:
+        negative = client.get("/v1/turns/turn-1/events?afterSeq=-1", headers=AUTH)
+        malformed = client.get("/v1/turns/turn-1/events?afterSeq=private-value", headers=AUTH)
+        missing = client.get("/v1/turns/turn-1/output", headers=AUTH)
+        unauthenticated = client.get("/v1/turns/turn-1/events?afterSeq=-1")
+
+    assert (negative.status_code, negative.json()) == (400, {"error": "afterSeq: Input should be greater than or equal to 0"})
+    assert malformed.status_code == 400
+    assert malformed.json()["error"].startswith("afterSeq: ")
+    assert "private-value" not in malformed.text
+    assert (missing.status_code, missing.json()) == (400, {"error": "ref: Field required"})
+    assert unauthenticated.status_code == 401
+
+
 def test_orka_turn_forwards_per_turn_metadata_env_and_session_fields():
     factory = EchoFactory()
     app = create_orka_app(_spec(), factory, auth_token="test-token")
