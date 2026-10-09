@@ -174,7 +174,7 @@ def test_upstream_status_code_handles_cycles():
         (400, 502, "ModelUpstreamError", "model service request failed"),
     ],
 )
-def test_normalize_agent_run_error_maps_upstream_status_without_upstream_text(upstream, status, code, message):
+def test_normalize_agent_run_error_maps_upstream_status_without_upstream_text(upstream, status, code, message, caplog):
     class SDKStatusError(Exception):
         status_code = upstream
 
@@ -186,13 +186,22 @@ def test_normalize_agent_run_error_maps_upstream_status_without_upstream_text(up
     err = support.normalize_agent_run_error(wrapped)
     assert (err.status, err.code, str(err)) == (status, code, message)
     assert err.upstream_status == upstream
+    assert f"HTTP {upstream}" in caplog.text
+    assert "sk-echoed-secret" not in caplog.text
 
 
 def test_normalize_agent_run_error_maps_transport_and_unknown_failures():
-    transport = RuntimeError("connection to https://user:pass@model.example failed")
-    transport.__cause__ = httpx.ConnectError("https://user:pass@model.example")
-    err = support.normalize_agent_run_error(transport)
-    assert (err.status, err.code, str(err)) == (502, "ModelUpstreamError", "model service request failed")
+    class TransportError(Exception):  # a vendored HTTP stack, such as httpx2
+        pass
+
+    class ConnectError(TransportError):
+        pass
+
+    for cause in (httpx.ConnectError("https://model.example"), ConnectError("https://model.example")):
+        transport = RuntimeError("connection to https://model.example failed")
+        transport.__cause__ = cause
+        err = support.normalize_agent_run_error(transport)
+        assert (err.status, err.code, str(err)) == (502, "ModelUpstreamError", "model service request failed")
 
     err = support.normalize_agent_run_error(TypeError("'NoneType' object is not iterable: private-response"))
     assert (err.status, err.code, str(err)) == (502, "AgentRunFailed", "agent run failed")

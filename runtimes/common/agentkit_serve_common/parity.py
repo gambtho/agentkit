@@ -19,6 +19,7 @@ stays framework-agnostic.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -47,6 +48,7 @@ __all__ = [
     "test_parity_unknown_tool_is_returned_to_model",
     "test_parity_model_http_errors_are_normalized",
     "test_parity_model_auth_errors_never_echo_credentials",
+    "test_parity_model_transport_errors_are_normalized",
     "test_parity_malformed_model_response_fails_closed",
     "test_parity_crashed_stdio_tool_fails_health",
     "test_parity_orka_rebuilds_runtime_after_crashed_stdio_tool",
@@ -149,7 +151,8 @@ class _ScriptedProvider:
     """Loopback Chat Completions endpoint that records requests and replays a script."""
 
     def __init__(self) -> None:
-        self.script: Callable[[dict[str, Any]], _Reply] = lambda body: _answer("parity-answer")
+        # A script returning None drops the connection without a response.
+        self.script: Callable[[dict[str, Any]], _Reply | None] = lambda body: _answer("parity-answer")
         self.requests: list[tuple[str | None, dict[str, Any]]] = []
         self._lock = threading.Lock()
         provider = self
@@ -186,6 +189,9 @@ class _ScriptedProvider:
         with self._lock:
             self.requests.append((handler.headers.get("authorization"), body))
         reply = self.script(body)
+        if reply is None:
+            handler.close_connection = True
+            return
         if reply.message is None:
             payload = reply.body if isinstance(reply.body, bytes) else json.dumps(reply.body).encode()
             self._send(handler, reply.status, "application/json", payload, reply.headers)
@@ -499,7 +505,6 @@ def test_parity_parallel_tool_calls():
 
 def test_parity_tool_events_pair_each_call():
     """Each executed tool call starts in_progress and ends under the same ID."""
-    import asyncio
 
     async def exercise(spec: AgentSpec) -> tuple[str, list[ToolCallEvent]]:
         events: list[ToolCallEvent] = []
@@ -615,6 +620,18 @@ def test_parity_model_auth_errors_never_echo_credentials():
             frames = _orka_turn(client, "hi")
         assert frames[-1]["type"] == "TurnFailed"
         assert frames[-1]["failed"] == {"reason": "ModelAuthRejected", "message": message, "retryable": False}
+
+
+def test_parity_model_transport_errors_are_normalized():
+    """A dropped model connection is reported without connection details."""
+    with _harness() as (provider, spec), _openai(spec) as client:
+        provider.script = lambda body: None
+        response = _chat(client, [{"role": "user", "content": "hi"}])
+
+    assert response.status_code == 502, response.text
+    assert response.json() == {
+        "error": {"message": "model service request failed", "type": "agent_error", "code": "ModelUpstreamError"}
+    }
 
 
 def test_parity_malformed_model_response_fails_closed():

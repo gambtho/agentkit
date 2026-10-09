@@ -11,6 +11,7 @@ common run error.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shlex
@@ -21,12 +22,13 @@ from types import TracebackType
 from typing import Mapping, TypeVar
 
 import anyio
-from httpx import TransportError
 
 from .config import AgentSpec, ToolSpec
 from .conversation import FORWARDED_ROLES
 from .model_errors import normalized_model_http_error
 from .runtime import AgentRunError
+
+logger = logging.getLogger(__name__)
 
 # Placeholder API key for OpenAI-compatible endpoints that need no auth (many
 # local servers reject an EMPTY string but accept any non-empty token). Used only
@@ -559,10 +561,21 @@ def normalize_agent_run_error(exc: BaseException) -> AgentRunError:
         return next((cur for cur in owned if cur.fatal), owned[0])
     status = upstream_status_code(exc, default=0)
     if status:
+        # The exception text is the upstream body, which a gateway may fill
+        # with the presented credential; operators get the status only.
+        logger.warning("model service returned HTTP %d", status)
         return normalized_model_http_error(status)
-    if any(isinstance(cur, TransportError) for cur in chain):
+    if any(_is_transport_error(cur) for cur in chain):
+        logger.warning("model service request failed", exc_info=exc)
         return AgentRunError("model service request failed", status=502, code="ModelUpstreamError")
+    logger.warning("agent run failed", exc_info=exc)
     return AgentRunError("agent run failed", status=502, code="AgentRunFailed")
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    # Matched by name: model SDKs vendor their HTTP stack (the OpenAI SDK raises
+    # httpx2 errors), so an isinstance check against httpx misses them.
+    return any(klass.__name__ in {"TransportError", "APIConnectionError"} for klass in type(exc).__mro__)
 
 
 # mcp.types.CONNECTION_CLOSED; the shared core cannot import the MCP SDK.
@@ -585,9 +598,11 @@ def mcp_tool_protocol_error(exc: BaseException | None = None, *, stdio: bool = F
     Stdio tool sessions are entered once for the runtime lifespan, so a closed
     stdio transport is fatal; remote tools reconnect per request.
     """
-    return AgentRunError(
-        "MCP tool protocol failed",
-        status=502,
-        code="MCPToolProtocolError",
-        fatal=stdio and exc is not None and mcp_session_closed(exc),
+    fatal = stdio and exc is not None and mcp_session_closed(exc)
+    # Remote tool errors can carry credential-bearing URLs; log the type only.
+    logger.warning(
+        "MCP tool protocol failed: %s%s",
+        type(exc).__name__ if exc is not None else "unexpected tool result",
+        " (stdio session closed)" if fatal else "",
     )
+    return AgentRunError("MCP tool protocol failed", status=502, code="MCPToolProtocolError", fatal=fatal)
