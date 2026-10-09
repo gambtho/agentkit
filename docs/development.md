@@ -153,7 +153,7 @@ Validate the runner syntax and focused ACP input/output behavior locally:
 
 ```sh
 bash -n scripts/orka-harness-v2-e2e.sh
-shellcheck scripts/orka-harness-v2-e2e.sh
+shellcheck -x scripts/orka-harness-v2-e2e.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
 uv run --directory runtimes/common --extra dev pytest -q tests/test_acp_protocol.py tests/test_cli_protocol.py
 ```

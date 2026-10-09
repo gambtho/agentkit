@@ -41,9 +41,9 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
           bash -n scripts/live-aikit-agent-e2e.sh
           bash -n scripts/aikit-e2e-common.sh
-          shellcheck scripts/live-aikit-agent-e2e.sh scripts/aikit-e2e-common.sh
+          shellcheck -x scripts/live-aikit-agent-e2e.sh scripts/aikit-e2e-common.sh
           bash -n scripts/orka-harness-v2-e2e.sh
-          shellcheck scripts/orka-harness-v2-e2e.sh
+          shellcheck -x scripts/orka-harness-v2-e2e.sh
           bash -n scripts/generate-agentsessions-stubs.sh
           shellcheck scripts/generate-agentsessions-stubs.sh
           test -z "$(gofmt -l test/orka-harness-v2/probe/*.go)"
