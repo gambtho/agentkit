@@ -111,16 +111,35 @@ The CI Docker job builds:
 1. the frontend image,
 2. all three adapter images,
 3. a fixture agent image for each runtime,
-4. each generated agent enough to pass `/healthz`, and
+4. each generated agent enough to pass `/healthz`,
 5. one generated agent in `AGENTKIT_PROTOCOL=orka` mode far enough to prove the
    native harness health/capabilities, bearer auth, turn acceptance, and SSE
-   terminal-frame shape.
+   terminal-frame shape, and
+6. a parity agent image for each runtime, checked by the container parity smoke.
 
 The smoke containers bind `0.0.0.0` inside the container and set
 `AGENTKIT_AUTH_TOKEN`, proving the startup auth gate is satisfied while probe
 endpoints remain unauthenticated. The Orka smoke uses an already-expired turn
 `deadline` so it can verify native Orka failure frames offline without calling a
 live model provider.
+
+The container parity smoke covers what the in-process parity suite cannot: the
+dependency set each image actually installed, image entrypoint and env wiring,
+and container logs. It builds `test/parity/agentkitfile-<runtime>.yaml` for each
+runtime and runs `test/parity/fixture.py`, a scripted model plus a remote MCP
+tool, on a private Docker network. Each image runs under the `openai`,
+`foundry`, and `orka` protocols and must return a plain answer, complete a tool
+round trip, and report `ModelAuthRejected` for a 401 that echoes the model key.
+That key must not appear in any response or container log.
+
+```sh
+make build-agentkit build-serve build-serve-maf build-serve-langgraph TAG=test
+scripts/parity-container-smoke.sh                 # all runtimes
+scripts/parity-container-smoke.sh langgraph       # one runtime
+```
+
+Set `PLATFORM=linux/arm64` on ARM hosts and `BUILDER` to a docker-driver Buildx
+builder, as for `make build-test-agent`.
 
 ## Harness v2 end-to-end checks
 
