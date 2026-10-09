@@ -493,13 +493,19 @@ def build_agent(
             func=skills.load_skill,
             approval_mode="never_require",
         ))
+    chat_client = client if client is not None else build_client(spec)
     return Agent(
-        client=client if client is not None else build_client(spec),
+        client=chat_client,
         instructions=instructions,
         name=spec.metadata.name,
         tools=tools,
         context_providers=[_RequestHistoryProvider(), *(context_providers or [])],
         middleware=[_ModelMessageMiddleware(), _MCPFailureMiddleware()],
+        # Each run already carries the full request history. A client that
+        # stores responses by default (the Foundry Responses API) would also
+        # chain the stored conversation and repeat that history. Other
+        # OpenAI-compatible servers may reject an unknown store field.
+        default_options={"store": False} if getattr(chat_client, "STORES_BY_DEFAULT", False) else None,
     )
 
 
