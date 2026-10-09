@@ -219,6 +219,58 @@ func TestRunnerSignalCleanup(t *testing.T) {
 	}
 }
 
+func fixtureDeclaresAPIKeyEnv(abi []byte) bool {
+	return regexp.MustCompile(`(?m)^  apiKeyEnv: "OPENAI_API_KEY"$`).Match(abi)
+}
+
+func TestFixtureAPIKeyEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		abi  string
+		want bool
+	}{
+		{
+			name: "declared",
+			abi:  "model:\n  apiKeyEnv: \"OPENAI_API_KEY\"\n",
+			want: true,
+		},
+		{
+			name: "missing",
+			abi:  "model:\n  name: \"host-model\"\n",
+		},
+		{
+			name: "wrong_name",
+			abi:  "model:\n  apiKeyEnv: \"OTHER_API_KEY\"\n",
+		},
+		{
+			name: "wrong_field",
+			abi:  "model:\n  otherKeyEnv: \"OPENAI_API_KEY\"\n",
+		},
+		{
+			name: "missing_with_unrelated_name",
+			abi:  "model:\n  name: \"host-model\"\ninstructions: \"OPENAI_API_KEY\"\n",
+		},
+		{
+			name: "wrong_name_with_unrelated_name",
+			abi:  "model:\n  apiKeyEnv: \"OTHER_API_KEY\"\ninstructions: \"OPENAI_API_KEY\"\n",
+		},
+		{
+			name: "wrong_name_prefix",
+			abi:  "model:\n  apiKeyEnv: \"OPENAI_API_KEY_OTHER\"\n",
+		},
+		{
+			name: "pair_in_instructions",
+			abi:  "model:\n  name: \"host-model\"\ninstructions: \"apiKeyEnv: \\\"OPENAI_API_KEY\\\"\"\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fixtureDeclaresAPIKeyEnv([]byte(tc.abi)); got != tc.want {
+				t.Fatalf("fixtureDeclaresAPIKeyEnv() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestContainerStatelessReplay(t *testing.T) {
 	image := os.Getenv("AGENTKIT_AGENTSESSIONS_IMAGE")
 	if image == "" {
@@ -241,7 +293,7 @@ func TestContainerStatelessReplay(t *testing.T) {
 	// Hash in-container so CLI whitespace trimming cannot change the exact-byte binding.
 	configDigest := string(docker(t, "run", "--rm", "--label", proofLabel+"="+runID, "--network", "none", "--entrypoint", "/usr/local/bin/python", imageDigest,
 		"-c", "import hashlib,pathlib; print('sha256:'+hashlib.sha256(pathlib.Path('/agent/agent.yaml').read_bytes()).hexdigest())"))
-	if bytes.Contains(abi, []byte("apiKeyEnv")) && !bytes.Contains(abi, []byte("OPENAI_API_KEY")) {
+	if !fixtureDeclaresAPIKeyEnv(abi) {
 		t.Fatal("fixture must declare only the absent OPENAI_API_KEY name")
 	}
 	if !bytes.Contains(abi, []byte("provider-must-not-be-used.invalid")) {
