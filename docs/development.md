@@ -89,10 +89,27 @@ python -m build --wheel
 For `runtimes/common`, omit `-e ../common` and compile/test
 `agentkit_serve_common` directly.
 
+Images and the main Python job install the newest release in each declared
+dependency range. CI also runs every package's tests at the lowest declared
+direct versions, so a lower bound that no longer works fails the build, and the
+whole workflow runs nightly to catch upstream releases that change behavior. To
+reproduce the lowest-version run:
+
+```sh
+cd runtimes/langgraph
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --resolution lowest-direct -e ../common -e '.[dev]'
+.venv/bin/python -m pytest -q
+```
+
 Python tests cover:
 
 - ABI reader validation,
 - OpenAI façade conformance shared by every adapter,
+- wire-level parity shared by every adapter: each adapter's real runtime runs
+  against a scripted loopback model and a stdio MCP fixture, and must send the
+  same conversation and tool results to the model, return the same results and
+  normalized errors, and keep secret canaries out of client-visible output,
 - conversation normalization,
 - runtime lifecycle startup/shutdown,
 - tool env allowlist behavior,
@@ -107,16 +124,35 @@ The CI Docker job builds:
 1. the frontend image,
 2. all three adapter images,
 3. a fixture agent image for each runtime,
-4. each generated agent enough to pass `/healthz`, and
+4. each generated agent far enough to pass `/healthz`,
 5. one generated agent in `AGENTKIT_PROTOCOL=orka` mode far enough to prove the
    native harness health/capabilities, bearer auth, turn acceptance, and SSE
-   terminal-frame shape.
+   terminal-frame shape, and
+6. a parity agent image for each runtime, checked by the container parity smoke.
 
 The smoke containers bind `0.0.0.0` inside the container and set
 `AGENTKIT_AUTH_TOKEN`, proving the startup auth gate is satisfied while probe
 endpoints remain unauthenticated. The Orka smoke uses an already-expired turn
 `deadline` so it can verify native Orka failure frames offline without calling a
 live model provider.
+
+The container parity smoke covers what the in-process parity suite cannot: the
+dependency set each image actually installed, image entrypoint and env wiring,
+and container logs. It builds `test/parity/agentkitfile-<runtime>.yaml` for each
+runtime and runs `test/parity/fixture.py`, a scripted model plus a remote MCP
+tool, on a private Docker network. Each image runs under the `openai`,
+`foundry`, and `orka` protocols and must return a plain answer, complete a tool
+round trip, and report `ModelAuthRejected` for a 401 that echoes the model key.
+That key must not appear in any response or container log.
+
+```sh
+make build-agentkit build-serve build-serve-maf build-serve-langgraph TAG=test
+scripts/parity-container-smoke.sh                 # all runtimes
+scripts/parity-container-smoke.sh langgraph       # one runtime
+```
+
+Set `PLATFORM=linux/arm64` on ARM hosts and `BUILDER` to a docker-driver Buildx
+builder, as for `make build-test-agent`.
 
 ## Harness v2 end-to-end checks
 

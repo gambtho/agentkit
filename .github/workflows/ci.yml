@@ -10,12 +10,17 @@ on:
     paths-ignore:
       - ".codex/**"
       - ".claude/**"
+  # Runtime dependencies float within their declared ranges, so a nightly run
+  # surfaces upstream releases that change behavior without blaming a PR.
+  schedule:
+    - cron: "23 7 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # The event name keeps a nightly run on main from cancelling a push run.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,6 +49,8 @@ jobs:
           shellcheck -x scripts/live-aikit-agent-e2e.sh scripts/aikit-e2e-common.sh
           bash -n scripts/orka-harness-v2-e2e.sh
           shellcheck -x scripts/orka-harness-v2-e2e.sh
+          bash -n scripts/parity-container-smoke.sh
+          shellcheck scripts/parity-container-smoke.sh
           bash -n scripts/generate-agentsessions-stubs.sh
           shellcheck scripts/generate-agentsessions-stubs.sh
           test -z "$(gofmt -l test/orka-harness-v2/probe/*.go)"
@@ -208,6 +215,69 @@ jobs:
       - name: Build Python wheel
         working-directory: ${{ matrix.path }}
         run: .venv/bin/python -m build --wheel
+
+  # Images and the job above install the newest releases in each declared range;
+  # this proves the declared lower bounds still work, parity suite included.
+  python-lowest:
+    name: Python lowest dependencies (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: common
+            path: runtimes/common
+          - package: pydantic-ai adapter
+            path: runtimes/pydantic-ai
+          - package: microsoft-agent-framework adapter
+            path: runtimes/microsoft-agent-framework
+          - package: langgraph adapter
+            path: runtimes/langgraph
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Setup Go for common wire interoperability
+        if: matrix.path == 'runtimes/common'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: test/agentsessions/go.mod
+          cache-dependency-path: test/agentsessions/go.sum
+
+      - name: Install lowest declared direct dependencies
+        working-directory: ${{ matrix.path }}
+        run: |
+          set -euxo pipefail
+          uv venv --python 3.12 .venv
+          # One resolution, so the shared core's own lower bounds apply too.
+          packages=()
+          if [ "${{ matrix.path }}" != "runtimes/common" ]; then
+            packages+=(-e ../common)
+          fi
+          prerelease_args=()
+          if [ "${{ matrix.path }}" = "runtimes/microsoft-agent-framework" ]; then
+            prerelease_args+=(--prerelease=allow)
+          fi
+          uv pip install --python .venv/bin/python --resolution lowest-direct \
+            "${prerelease_args[@]}" "${packages[@]}" -e ".[dev]"
+          uv pip list --python .venv/bin/python
+
+      - name: Run Python tests
+        working-directory: ${{ matrix.path }}
+        run: .venv/bin/python -m pytest -q
 
   container-build:
     name: Container build and offline smoke
@@ -421,6 +491,13 @@ jobs:
           smoke agentkit-smoke-langgraph langgraph-agent:ci 18082
           orka_smoke agentkit-smoke-orka hello-agent:ci 18083
 
+      - name: Container parity smoke
+        env:
+          TAG: ci
+          BUILDER: ""
+          PLATFORM: linux/amd64
+        run: bash scripts/parity-container-smoke.sh
+
   live-aikit-e2e:
     name: Live AIKit E2E (${{ matrix.adapter }})
     runs-on: ubuntu-latest
@@ -483,6 +560,48 @@ jobs:
         env:
           ADAPTER: ${{ matrix.adapter }}
         run: bash scripts/live-aikit-agent-e2e.sh "$ADAPTER"
+
+  orka-v1-conformance:
+    name: Orka harness v1 conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Read pinned Orka revision
+        id: orka
+        run: |
+          revision="$(cat test/orka-harness-v2/orka-revision)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned Orka
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: orka-agents/orka
+          ref: ${{ steps.orka.outputs.revision }}
+          path: orka
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: orka/go.mod
+          cache-dependency-path: orka/go.sum
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      # Orka's suite starts this checkout's create_orka_app with uv and drives
+      # observed and brokered turns through Orka's own harness client.
+      - name: Run Orka's AgentKit conformance suite
+        working-directory: orka
+        env:
+          AGENTKIT_SERVE_ROOT: ${{ github.workspace }}
+        run: go test ./internal/harness/conformance -run 'TestExternalAgentKitServe' -count=1 -v
 
   orka-v2-offline:
     name: Harness v2 E2E (${{ matrix.adapter }})

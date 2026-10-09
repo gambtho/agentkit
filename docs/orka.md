@@ -212,6 +212,26 @@ servers continue to execute inside the runtime; Orka observes the run and remain
 responsible for policy, approvals, trust tiers, Tool CRDs, idempotency, and
 side-effect governance.
 
+Orka sends only the new prompt for each turn. AgentKit keeps the completed
+user/assistant turns of each `runtimeSessionID` and passes them to the runtime as
+history, so every runtime adapter continues a session the same way. Failed and
+cancelled turns are not added. If a run reports a fatal runtime failure, such as
+an MCP tool session closing, the next turn in that runtime session builds a
+fresh runtime with the same history. History is kept apart from runtimes, so a
+session also keeps it when its runtime is evicted for capacity
+(`AGENTKIT_ORKA_MAX_RUNTIME_SESSIONS`, default 64) or fails to restart. AgentKit
+keeps the history of up to `AGENTKIT_ORKA_MAX_SESSION_HISTORIES` sessions
+(default 256, never fewer than the runtime session limit) and drops the least
+recently used session without a live runtime first. Each session's history is
+capped at `AGENTKIT_ORKA_MAX_SESSION_HISTORY_BYTES` of text (default 1 MiB);
+past that, the oldest completed turns are dropped.
+
+Runtimes start lazily on a session's first turn. If one fails to start, for
+example because a remote MCP tool rejects its credential, the turn fails with
+`RuntimeStartFailed`. Tool clients put credential-bearing URLs and upstream
+bodies in startup errors, so the AgentKit log records only the exception types.
+Configuration errors such as a missing env var keep their own message.
+
 Current AgentKit Serve Orka support is **observed mode by default**. The default
 capability response intentionally omits `brokeredToolClasses` and
 `supportsContinuation`. Brokered read, write, and coordination are implemented
@@ -395,6 +415,17 @@ AgentKit responds with Orka `CancelTurnResponse`:
   "message": "cancel accepted"
 }
 ```
+
+Rejected requests use Orka's native error body, `{"error": "<message>"}`.
+Starting a turn whose `turnID` is still running returns 409
+`turn already exists`; a retained terminal turn returns 409
+`turn already completed`; and a start while another turn runs returns 409
+`maximum concurrent turns reached`. Orka's client matches these exact messages.
+
+CI runs Orka's own AgentKit conformance suite
+(`internal/harness/conformance`, `TestExternalAgentKitServe*`) at the pinned
+`test/orka-harness-v2/orka-revision` against this checkout's
+`create_orka_app`.
 
 ## Offline smoke coverage
 
