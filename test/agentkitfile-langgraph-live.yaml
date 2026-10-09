@@ -3,8 +3,8 @@
 apiVersion: v1alpha1
 kind: Agent
 metadata:
-  name: maf-live-e2e-agent
-runtime: microsoft-agent-framework
+  name: langgraph-live-e2e-agent
+runtime: langgraph
 model:
   provider: openai-compatible
   baseURL: http://aikit:8080/v1
