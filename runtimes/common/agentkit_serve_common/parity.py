@@ -51,6 +51,7 @@ __all__ = [
     "test_parity_model_transport_errors_are_normalized",
     "test_parity_malformed_model_response_fails_closed",
     "test_parity_crashed_stdio_tool_fails_health",
+    "test_parity_orka_runtime_startup_failure_hides_tool_credentials",
     "test_parity_orka_rebuilds_runtime_after_crashed_stdio_tool",
 ]
 
@@ -62,10 +63,14 @@ _UNDECLARED_SECRET = "parity-undeclared-canary"
 _TOOL_ENV = "PARITY_TOOL_VISIBLE"
 _TOOL_VALUE = "parity-tool-visible"
 _TOOL_ERROR_DETAIL = "parity-tool-internal-detail"
+_REMOTE_TOOL_TOKEN_ENV = "PARITY_REMOTE_TOOL_TOKEN"
+_REMOTE_TOOL_TOKEN = "parity-remote-tool-token-canary"
+_REMOTE_TOOL_URL_ENV = "PARITY_REMOTE_TOOL_URL"
+_REMOTE_TOOL_URL_KEY = "parity-remote-url-key-canary"
 _INSTRUCTIONS = "Parity baked instructions."
 _ORKA_TOKEN = "parity-orka-token"
 _TOOL_NAMES = {"probe_echo", "probe_fail", "probe_env_dump", "probe_crash"}
-_CANARIES = (_MODEL_KEY, _UNDECLARED_SECRET, _TOOL_ERROR_DETAIL)
+_CANARIES = (_MODEL_KEY, _UNDECLARED_SECRET, _TOOL_ERROR_DETAIL, _REMOTE_TOOL_TOKEN, _REMOTE_TOOL_URL_KEY)
 
 # Run in a subprocess with the adapter's interpreter; the MCP SDK is an adapter
 # dependency, not a shared-core one.
@@ -185,7 +190,14 @@ class _ScriptedProvider:
             return [body for _, body in self.requests]
 
     def _handle(self, handler: BaseHTTPRequestHandler) -> None:
-        body = json.loads(handler.rfile.read(int(handler.headers.get("content-length") or 0)))
+        raw = handler.rfile.read(int(handler.headers.get("content-length") or 0))
+        if handler.path.startswith("/mcp"):
+            # A remote MCP endpoint that rejects the tool's credential and, like
+            # some gateways, echoes it and the request URL back.
+            echoed = {"error": f"unauthorized {handler.headers.get('authorization')} at {handler.path}"}
+            self._send(handler, 401, "application/json", json.dumps(echoed).encode())
+            return
+        body = json.loads(raw)
         with self._lock:
             self.requests.append((handler.headers.get("authorization"), body))
         reply = self.script(body)
@@ -240,7 +252,13 @@ class _ScriptedProvider:
 # --------------------------------------------------------------------------- #
 @contextmanager
 def _canary_env() -> Iterator[None]:
-    values = {_MODEL_KEY_ENV: _MODEL_KEY, _UNDECLARED_ENV: _UNDECLARED_SECRET, _TOOL_ENV: _TOOL_VALUE}
+    values = {
+        _MODEL_KEY_ENV: _MODEL_KEY,
+        _UNDECLARED_ENV: _UNDECLARED_SECRET,
+        _TOOL_ENV: _TOOL_VALUE,
+        _REMOTE_TOOL_TOKEN_ENV: _REMOTE_TOOL_TOKEN,
+        _REMOTE_TOOL_URL_ENV: "",
+    }
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
@@ -254,7 +272,7 @@ def _canary_env() -> Iterator[None]:
 
 
 @contextmanager
-def _harness(*, tools: bool = False) -> Iterator[tuple[_ScriptedProvider, AgentSpec]]:
+def _harness(*, tools: bool = False, rejecting_remote_tool: bool = False) -> Iterator[tuple[_ScriptedProvider, AgentSpec]]:
     with tempfile.TemporaryDirectory() as tmp, _ScriptedProvider() as provider, _canary_env():
         tool_specs: list[dict[str, Any]] = []
         if tools:
@@ -262,6 +280,18 @@ def _harness(*, tools: bool = False) -> Iterator[tuple[_ScriptedProvider, AgentS
             with open(server, "w", encoding="utf-8") as fh:
                 fh.write(_MCP_SERVER)
             tool_specs.append({"name": "probe", "command": [sys.executable, server], "env": [_TOOL_ENV]})
+        if rejecting_remote_tool:
+            remote_url = provider.base_url.removesuffix("/v1") + f"/mcp?key={_REMOTE_TOOL_URL_KEY}"
+            os.environ[_REMOTE_TOOL_URL_ENV] = remote_url
+            tool_specs.append(
+                {
+                    "name": "remote",
+                    "type": "mcp",
+                    "transport": "streamable-http",
+                    "urlEnv": _REMOTE_TOOL_URL_ENV,
+                    "auth": {"type": "bearer", "tokenEnv": _REMOTE_TOOL_TOKEN_ENV},
+                }
+            )
         spec = AgentSpec.model_validate(
             {
                 "abiVersion": "v0",
@@ -664,6 +694,16 @@ def test_parity_crashed_stdio_tool_fails_health():
             assert client.get("/readiness").status_code == 200
             _foundry_respond(client, [{"role": "user", "content": "crash the tool"}])
             assert client.get("/readiness").status_code == 503
+
+
+def test_parity_orka_runtime_startup_failure_hides_tool_credentials():
+    """Orka builds runtimes per turn, so startup errors reach the turn's frames."""
+    with _harness(rejecting_remote_tool=True) as (provider, spec), _orka(spec) as client:
+        frames = _orka_turn(client, "hi")
+
+    assert frames[-1]["type"] == "TurnFailed"
+    assert frames[-1]["failed"] == {"reason": "RuntimeStartFailed", "message": "runtime failed to start", "retryable": False}
+    assert provider.requests == []
 
 
 def test_parity_orka_rebuilds_runtime_after_crashed_stdio_tool():

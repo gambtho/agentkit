@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 from contextlib import asynccontextmanager, contextmanager
@@ -21,8 +22,10 @@ from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .adapter_support import AgentBuildError, normalize_agent_run_error
 from .config import AgentSpec
 from .conversation import ConversationTurn, RunRequest
 from .runtime import (
@@ -37,6 +40,8 @@ from .runtime import (
     ToolBroker,
 )
 from .server import make_auth_dependency
+
+logger = logging.getLogger(__name__)
 
 ORKA_HARNESS_VERSION = "orka.harness.v1"
 HTTP_TRANSPORT = "http+sse"
@@ -970,6 +975,13 @@ class OrkaToolBroker:
                 self.state.condition.notify_all()
 
 
+def _runtime_start_error(exc: BaseException) -> AgentRunError:
+    # Tool and model clients put URLs and upstream bodies in startup errors, so
+    # only operators see them.
+    logger.warning("runtime session failed to start", exc_info=exc)
+    return AgentRunError("runtime failed to start", status=503, code="RuntimeStartFailed")
+
+
 async def _run_turn(
     get_runtime: Callable[[RunRequest], Awaitable[ActiveRuntime]],
     turns: dict[str, TurnState],
@@ -1041,7 +1053,13 @@ async def _run_turn(
         )
         return
     except Exception as exc:  # noqa: BLE001 - protocol envelope must be deterministic.
-        code = exc.__class__.__name__
+        # AgentBuildError messages are secret-free configuration guidance. Any
+        # other exception text may carry upstream bodies or credential-bearing URLs.
+        if isinstance(exc, AgentBuildError):
+            code, message = exc.__class__.__name__, str(exc)
+        else:
+            normalized = normalize_agent_run_error(exc)
+            code, message = normalized.code or normalized.__class__.__name__, str(normalized)
         await _append_terminal_if_missing(
             state,
             terminal_order,
@@ -1049,8 +1067,8 @@ async def _run_turn(
             max_terminal_turns,
             "TurnFailed",
             summary="turn failed",
-            failed={"reason": code, "message": str(exc), "retryable": False},
-            error={"code": code, "message": str(exc), "retryable": False},
+            failed={"reason": code, "message": message, "retryable": False},
+            error={"code": code, "message": message, "retryable": False},
         )
         return
 
@@ -1280,7 +1298,19 @@ def create_orka_app(
         # thread running with turn credentials in process-global os.environ.
         with _scoped_process_env(run_request.env):
             context = factory.build_runtime(spec)
-            session = await context.__aenter__()
+            try:
+                session = await context.__aenter__()
+            except (AgentBuildError, AgentRunError):
+                raise
+            except asyncio.CancelledError as exc:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
+                # An MCP client task group can report its own startup failure as
+                # a CancelledError; with no cancellation pending, it is a failure.
+                raise _runtime_start_error(exc) from exc
+            except Exception as exc:
+                raise _runtime_start_error(exc) from exc
         active = ActiveRuntime(context=context, session=session, env=dict(run_request.env), history=history)
         active_runtimes[runtime_session_id] = active
         runtime_order.append(runtime_session_id)
@@ -1317,6 +1347,11 @@ def create_orka_app(
     app = FastAPI(title="agentkit-serve-orka", lifespan=lifespan)
     auth = Depends(make_auth_dependency(auth_token))
 
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exc_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        # Orka's native error body is {"error": message} (harness.WriteError).
+        return JSONResponse({"error": str(exc.detail)}, status_code=exc.status_code, headers=exc.headers)
+
     @app.get("/v1/health")
     async def health() -> dict[str, Any]:
         return health_response(spec)
@@ -1335,10 +1370,13 @@ def create_orka_app(
             raise HTTPException(status_code=400, detail="Request body must be a JSON object")
 
         turn_id = _turn_id_from_payload(data)
-        if turn_id in turns:
-            raise HTTPException(status_code=409, detail="turn already exists")
+        # Orka's client recognizes these exact 409 messages as duplicate-turn and
+        # capacity outcomes; other wording reads as an opaque failure.
+        if (existing := turns.get(turn_id)) is not None:
+            detail = "turn already completed" if existing.terminal_event is not None else "turn already exists"
+            raise HTTPException(status_code=409, detail=detail)
         if any(state.terminal_event is None for state in turns.values()):
-            raise HTTPException(status_code=429, detail="maxConcurrentTurns limit reached")
+            raise HTTPException(status_code=409, detail="maximum concurrent turns reached")
 
         tool_mode = _clean(data.get("toolExecutionMode")) or TOOL_MODE_OBSERVED
         run_request = _request_to_run_request(data, turn_id=turn_id, spec=spec, allow_brokered=bool(brokered_classes))

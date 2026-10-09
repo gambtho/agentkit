@@ -117,8 +117,9 @@ class StaticOutputFactory:
 
 
 class RaisingRuntime(StaticOutputRuntime):
+    # Runtime-owned AgentRunError text is the failure detail frames still carry.
     async def run(self, request: RunRequest) -> RunResult:
-        raise RuntimeError(self.text)
+        raise AgentRunError(self.text)
 
 
 class RaisingFactory(StaticOutputFactory):
@@ -555,7 +556,7 @@ def test_orka_rejects_start_frame_text_that_is_not_valid_utf8_without_retaining_
         )
 
     assert rejected.status_code == 400
-    assert rejected.json() == {"detail": "TurnStarted contains text that is not valid UTF-8"}
+    assert rejected.json() == {"error": "TurnStarted contains text that is not valid UTF-8"}
     assert "turn-invalid-utf8-start" not in app.state.turns
 
 
@@ -566,10 +567,15 @@ def test_orka_duplicate_turn_rejection_matches_orka_conformance_contract():
         turn_id = _create_turn(client, turnID="turn-duplicate", input={"prompt": "slow", "contextRefs": [], "env": []})
         duplicate = client.post("/v1/turns", json=_start_payload(turnID=turn_id, input={"prompt": "slow", "contextRefs": [], "env": []}), headers=AUTH)
         cancel = client.post(f"/v1/turns/{turn_id}/cancel", json=_cancel_payload(turnID=turn_id), headers=AUTH)
+        _frames(client.get(f"/v1/turns/{turn_id}/events", headers=AUTH).text)
+        completed_duplicate = client.post("/v1/turns", json=_start_payload(turnID=turn_id, input={"prompt": "again", "contextRefs": [], "env": []}), headers=AUTH)
 
+    # Orka's client matches these exact native {"error": ...} bodies.
     assert duplicate.status_code == 409
-    assert duplicate.json() == {"detail": "turn already exists"}
+    assert duplicate.json() == {"error": "turn already exists"}
     assert cancel.status_code == 202
+    assert completed_duplicate.status_code == 409
+    assert completed_duplicate.json() == {"error": "turn already completed"}
 
 
 def test_orka_turn_forwards_per_turn_metadata_env_and_session_fields():
@@ -795,7 +801,7 @@ def test_orka_cancel_rejects_turn_owner_mismatch_without_cancelling_turn(field_n
         )
 
         assert mismatch.status_code == 400
-        assert mismatch.json() == {"detail": "cancel namespace/taskName/sessionName must match turn"}
+        assert mismatch.json() == {"error": "cancel namespace/taskName/sessionName must match turn"}
         assert state.task is not None
         assert state.task.cancelling() == 0
         assert state.terminal_event is None
@@ -839,8 +845,8 @@ def test_orka_enforces_advertised_single_active_turn_limit():
             headers=AUTH,
         )
 
-    assert rejected.status_code == 429
-    assert "maxConcurrentTurns" in rejected.text
+    assert rejected.status_code == 409
+    assert rejected.json() == {"error": "maximum concurrent turns reached"}
     assert accepted_after_terminal.status_code == 202
 
 
@@ -2021,7 +2027,7 @@ def test_orka_brokered_json_output_over_utf8_limit_returns_413_and_visible_termi
     )
     frames = _frames(response.text)
     assert rejected.status_code == 413
-    assert rejected.json() == {"detail": message}
+    assert rejected.json() == {"error": message}
     assert replayed_rejection.status_code == 413
     assert replayed_rejection.json() == rejected.json()
     assert conflicting.status_code == 409
@@ -2485,6 +2491,45 @@ def test_orka_runtime_session_history_carries_only_completed_turns():
     committed = (ConversationTurn(role="user", text="q1"), ConversationTurn(role="assistant", text="a1"))
     assert [request.history for request in session.requests] == [(), committed, committed]
     assert other.requests[0].history == ()
+
+
+class FailingStartRuntime(ScriptedRuntime):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+
+    async def __aenter__(self) -> RuntimeSession:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(RuntimeError("401 for url https://tool.example/mcp?key=private-key"), id="exception"),
+        pytest.param(asyncio.CancelledError("Cancelled via cancel scope"), id="leaked-task-group-cancel"),
+    ],
+)
+def test_orka_runtime_start_failure_hides_startup_detail(error, caplog):
+    app = create_orka_app(_spec(), ScriptedFactory(FailingStartRuntime(error)), auth_token="test-token")
+
+    with TestClient(app) as client:
+        terminal = _run_prompt(client, "turn-1", "q1")
+
+    assert terminal["type"] == "TurnFailed"
+    assert terminal["failed"] == {"reason": "RuntimeStartFailed", "message": "runtime failed to start", "retryable": False}
+    assert "runtime session failed to start" in caplog.text
+
+
+def test_orka_unexpected_run_exception_text_is_not_streamed():
+    class LeakyRuntime(ScriptedRuntime):
+        async def run(self, request: RunRequest) -> RunResult:
+            raise TypeError("unexpected response body with private-key")
+
+    app = create_orka_app(_spec(), ScriptedFactory(LeakyRuntime()), auth_token="test-token")
+    with TestClient(app) as client:
+        terminal = _run_prompt(client, "turn-1", "q1")
+
+    assert terminal["failed"] == {"reason": "AgentRunFailed", "message": "agent run failed", "retryable": False}
 
 
 def test_orka_fatal_run_failure_rebuilds_runtime_and_keeps_history():

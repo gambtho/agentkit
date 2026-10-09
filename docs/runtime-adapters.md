@@ -90,6 +90,7 @@ URLs, and echoed credentials, so it never reaches the client:
 | Model returned 429 or 5xx after SDK retries | 503 | `ModelUnavailable` |
 | Model returned another 4xx, or the request failed in transport | 502 | `ModelUpstreamError` |
 | MCP transport or protocol failure | 502 | `MCPToolProtocolError` |
+| Orka runtime session failed to start | 503 | `RuntimeStartFailed` |
 | Any other framework failure | 502 | `AgentRunFailed` |
 
 Foundry mode reports the same model codes with its `upstream_status` field, and

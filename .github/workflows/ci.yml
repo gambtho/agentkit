@@ -520,6 +520,46 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: bash scripts/live-copilot-agent-e2e.sh
 
+  orka-v1-conformance:
+    name: Orka harness v1 conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Read pinned Orka revision
+        id: orka
+        run: |
+          revision="$(cat test/orka-harness-v2/orka-revision)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pinned Orka
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: orka-agents/orka
+          ref: ${{ steps.orka.outputs.revision }}
+          path: orka
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: orka/go.mod
+          cache-dependency-path: orka/go.sum
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      # Orka's suite starts this checkout's create_orka_app with uv and drives
+      # observed and brokered turns through Orka's own harness client.
+      - name: Run Orka's AgentKit conformance suite
+        working-directory: orka
+        env:
+          AGENTKIT_SERVE_ROOT: ${{ github.workspace }}
+        run: go test ./internal/harness/conformance -run 'TestExternalAgentKitServe' -count=1 -v
+
   orka-v2-offline:
     name: Harness v2 E2E (${{ matrix.adapter }})
     runs-on: ubuntu-latest

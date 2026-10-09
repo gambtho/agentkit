@@ -210,6 +210,12 @@ cancelled turns are not added. If a run reports a fatal runtime failure, such as
 a stdio MCP tool subprocess exiting, the next turn in that runtime session builds
 a fresh runtime with the same history.
 
+Runtimes start lazily on a session's first turn. If one fails to start, for
+example because a remote MCP tool rejects its credential, the turn fails with
+`RuntimeStartFailed` and the cause goes only to the AgentKit log, since tool
+clients put credential-bearing URLs and upstream bodies in startup errors.
+Configuration errors such as a missing env var keep their own message.
+
 Current AgentKit Serve Orka support is **observed mode by default**. The default
 capability response intentionally omits `brokeredToolClasses` and
 `supportsContinuation`. Brokered read, write, and coordination are implemented
@@ -393,6 +399,17 @@ AgentKit responds with Orka `CancelTurnResponse`:
   "message": "cancel accepted"
 }
 ```
+
+Rejected requests use Orka's native error body, `{"error": "<message>"}`.
+Starting a turn whose `turnID` is still running returns 409
+`turn already exists`; a retained terminal turn returns 409
+`turn already completed`; and a start while another turn runs returns 409
+`maximum concurrent turns reached`. Orka's client matches these exact messages.
+
+CI runs Orka's own AgentKit conformance suite
+(`internal/harness/conformance`, `TestExternalAgentKitServe*`) at the pinned
+`test/orka-harness-v2/orka-revision` against this checkout's
+`create_orka_app`.
 
 ## Offline smoke coverage
 
