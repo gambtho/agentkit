@@ -2590,7 +2590,7 @@ def test_orka_history_survives_runtime_capacity_eviction():
 def test_orka_session_history_retention_is_bounded():
     app = create_orka_app(
         _spec(),
-        ScriptedFactory(ScriptedRuntime("a1"), ScriptedRuntime("b1"), ScriptedRuntime("c1"), reopened := ScriptedRuntime("a2")),
+        ScriptedFactory(ScriptedRuntime("a1"), ScriptedRuntime("b1"), reopened := ScriptedRuntime("a2")),
         auth_token="test-token",
         max_runtime_sessions=1,
         max_session_histories=1,
@@ -2599,7 +2599,6 @@ def test_orka_session_history_retention_is_bounded():
     with TestClient(app) as client:
         assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
         assert _run_prompt(client, "turn-2", "o1", runtime_session_id="runtime-session-2")["type"] == "TurnCompleted"
-        assert _run_prompt(client, "turn-3", "p1", runtime_session_id="runtime-session-3")["type"] == "TurnCompleted"
-        assert _run_prompt(client, "turn-4", "q2")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-3", "q2")["type"] == "TurnCompleted"
 
     assert reopened.requests[0].history == ()

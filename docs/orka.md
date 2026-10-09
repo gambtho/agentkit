@@ -212,8 +212,8 @@ fresh runtime with the same history. History is kept apart from runtimes, so a
 session also keeps it when its runtime is evicted for capacity
 (`AGENTKIT_ORKA_MAX_RUNTIME_SESSIONS`, default 64) or fails to restart. AgentKit
 keeps the history of up to `AGENTKIT_ORKA_MAX_SESSION_HISTORIES` sessions
-(default 256), dropping the least recently used session without a live runtime
-first.
+(default 256) and drops the least recently used first; a session with a live
+runtime always keeps its history.
 
 Runtimes start lazily on a session's first turn. If one fails to start, for
 example because a remote MCP tool rejects its credential, the turn fails with

@@ -1291,20 +1291,22 @@ def create_orka_app(
 
     def session_history(runtime_session_id: str) -> list[ConversationTurn]:
         # Transcripts outlive runtimes, so a session keeps its conversation when
-        # its runtime is evicted for capacity or rebuilt. Only transcripts of
-        # sessions without a live runtime are dropped to stay within the limit.
+        # its runtime is evicted for capacity or rebuilt.
         history = session_histories.pop(runtime_session_id, [])
         session_histories[runtime_session_id] = history
-        overflow = len(session_histories) - history_limit
-        if overflow > 0:
-            idle = [
-                session_id
-                for session_id in session_histories
-                if session_id != runtime_session_id and session_id not in active_runtimes
-            ]
-            for session_id in idle[:overflow]:
-                del session_histories[session_id]
         return history
+
+    def trim_session_histories(opening_session_id: str) -> None:
+        # Runs after runtime capacity is reserved, so a session whose runtime
+        # was just evicted counts as idle. Live sessions keep their transcripts.
+        overflow = len(session_histories) - history_limit
+        idle = [
+            session_id
+            for session_id in session_histories
+            if session_id != opening_session_id and session_id not in active_runtimes
+        ]
+        for session_id in idle[: max(overflow, 0)]:
+            del session_histories[session_id]
 
     async def get_runtime(run_request: RunRequest) -> ActiveRuntime:
         runtime_session_id = run_request.session_id or ""
@@ -1324,6 +1326,7 @@ def create_orka_app(
             await close_runtime(runtime_session_id, active)
         await wait_for_runtime_session_close(runtime_session_id)
         await reserve_runtime_slot()
+        trim_session_histories(runtime_session_id)
         # Runtime factories read the process environment today. Keep this scoped
         # section on the event loop thread so cancellation cannot leave a worker
         # thread running with turn credentials in process-global os.environ.
