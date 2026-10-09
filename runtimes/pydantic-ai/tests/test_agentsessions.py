@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hashlib
 import os
 from contextlib import asynccontextmanager
@@ -267,3 +268,29 @@ def test_actual_sdk_blocked_effect_cleanup_and_next_execution(binding, control):
             assert ends[0].end.state == "COMPLETED"
         assert unhandled == []
     asyncio.run(check())
+
+
+def test_sdk_debug_diagnostics_do_not_export_execution_content(binding, caplog):
+    logger = logging.getLogger("openai._base_client")
+    caplog.set_level(logging.DEBUG, logger="openai")
+    filters = list(logger.filters)
+    binding.spec.instructions = "private-sdk-instructions-marker"
+
+    async def check():
+        history = [c.Event(kind=c.EVENT_INPUT, message=text("user", "private-sdk-history-marker"))]
+        async with live(binding) as stub:
+            _, end = await turn(
+                stub, inputs=["private-sdk-input-marker"], history=history,
+                reply="private-sdk-output-marker",
+            )
+            assert end[0].end.state == "COMPLETED"
+
+    asyncio.run(check())
+    assert not any(marker in "\n".join(caplog.messages) for marker in [
+        "private-sdk-instructions-marker", "private-sdk-history-marker",
+        "private-sdk-input-marker", "private-sdk-output-marker",
+    ])
+    assert logger.filters == filters
+    assert logger.getEffectiveLevel() == logging.DEBUG
+    logger.debug("ordinary-sdk-debug-control")
+    assert "ordinary-sdk-debug-control" in caplog.messages

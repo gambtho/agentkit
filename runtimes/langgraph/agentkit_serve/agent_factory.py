@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
+from contextvars import Context
 from datetime import timedelta
 from types import TracebackType
 from typing import Any
@@ -36,6 +37,7 @@ from uuid import UUID
 from langchain.agents import create_agent
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tracers.stdout import ConsoleCallbackHandler, FunctionCallbackHandler
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_openai import ChatOpenAI
@@ -227,6 +229,13 @@ def build_agent(spec: AgentSpec) -> LangGraphRuntime:
     return build_runtime(spec)
 
 
+class _SilentConsoleCallbackHandler(ConsoleCallbackHandler):
+    """Satisfy LangChain's global-debug handler check without a console sink."""
+
+    def __init__(self) -> None:
+        FunctionCallbackHandler.__init__(self, function=lambda _: None)
+
+
 async def run_agentsessions(
     binding: VerifiedAgentsessionsBinding, request: RunRequest, exchange: ExecutionExchange,
 ) -> None:
@@ -240,6 +249,7 @@ async def run_agentsessions(
     from openai import AsyncOpenAI
 
     from agentkit_serve_common.agentsessions.bridge import loopback_bridge
+    from agentkit_serve_common.agentsessions.diagnostics import suppress_sdk_diagnostics
 
     # Empty journal turns are authoritative, unlike the facade's conversion.
     messages = [
@@ -253,8 +263,13 @@ async def run_agentsessions(
     if binding.spec.instructions:
         wire_messages.insert(0, {"role": "system", "content": binding.spec.instructions})
 
-    async with loopback_bridge(exchange) as local:
-        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as http:
+    async with AsyncExitStack() as scope:
+        scope.enter_context(suppress_sdk_diagnostics())
+        local = await scope.enter_async_context(loopback_bridge(exchange))
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            event_hooks={"request": [local.authorize_request]},
+        ) as http:
             async with AsyncOpenAI(
                 base_url=local.base_url, api_key=local.token,
                 organization="", project="", http_client=http,
@@ -264,31 +279,41 @@ async def run_agentsessions(
                 async def local_key() -> str:
                     return local.token
 
-                # Empty callbacks alone do not disable ambient LangSmith tracing.
-                with tracing_context(enabled=False, parent=False):
-                    model = ChatOpenAI(
-                        model=binding.spec.model.name, base_url=local.base_url,
-                        # A supported async key callback prevents construction of
-                        # an unused, unowned synchronous OpenAI client.
-                        api_key=local_key, async_client=client.chat.completions,
-                        root_async_client=client, openai_proxy="",
-                        cache=False, streaming=False, disable_streaming=True,
-                        stream_usage=False, use_responses_api=False,
-                        # Omitted temperature becomes 1 for o1; the host's strict
-                        # text-only bridge accepts no model sampling options.
-                        temperature=None, callbacks=[], metadata={}, tags=[],
-                        # ChatOpenAI rewrites o-series system roles to developer.
-                        # This fixed adapter-owned text projection restores the
-                        # canonical roles; it is not caller-supplied SDK options.
-                        extra_body={"messages": wire_messages},
-                    )
-                    graph = create_agent(
-                        model=model, tools=[], system_prompt=binding.spec.instructions or None,
-                        checkpointer=None, store=None, cache=None,
-                    )
-                    await graph.ainvoke(
-                        {"messages": messages}, config={"callbacks": [], "metadata": {}, "tags": []},
-                    )
+                async def invoke() -> None:
+                    # Empty callbacks alone do not disable ambient LangSmith tracing.
+                    with suppress_sdk_diagnostics(), tracing_context(enabled=False, parent=False):
+                        model = ChatOpenAI(
+                            model=binding.spec.model.name, base_url=local.base_url,
+                            # A supported async key callback prevents construction of
+                            # an unused, unowned synchronous OpenAI client.
+                            api_key=local_key, async_client=client.chat.completions,
+                            root_async_client=client, openai_proxy="",
+                            cache=False, streaming=False, disable_streaming=True,
+                            stream_usage=False, use_responses_api=False,
+                            # Omitted temperature becomes 1 for o1; the host's strict
+                            # text-only bridge accepts no model sampling options.
+                            temperature=None, verbose=False, callbacks=[], metadata={}, tags=[],
+                            # ChatOpenAI rewrites o-series system roles to developer.
+                            # This fixed adapter-owned text projection restores the
+                            # canonical roles; it is not caller-supplied SDK options.
+                            extra_body={"messages": wire_messages},
+                        )
+                        graph = create_agent(
+                            model=model, tools=[], system_prompt=binding.spec.instructions or None,
+                            checkpointer=False, store=None, cache=None,
+                        )
+                        # Global debug otherwise installs a printing handler even
+                        # with empty callbacks. Inherit an execution-local no-output
+                        # console handler instead; leave the process flag untouched.
+                        await graph.ainvoke(
+                            {"messages": messages}, config={
+                                "callbacks": [_SilentConsoleCallbackHandler()],
+                                "metadata": {}, "tags": [],
+                            },
+                        )
+                # A fresh context prevents parent Runnable callbacks, stores,
+                # checkpoints and tracing contexts from joining this execution.
+                await asyncio.create_task(invoke(), context=Context())
     return None
 
 

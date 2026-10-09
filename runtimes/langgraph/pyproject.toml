@@ -13,7 +13,8 @@ authors = [{ name = "AgentKit" }]
 dependencies = [
     "langchain>=1.2,<2",
     "langgraph>=1.1,<2",
-    "langchain-openai>=1.0,<2",
+    # Async API-key callbacks avoid constructing an unowned synchronous client.
+    "langchain-openai>=1.0.1,<2",
     "langchain-mcp-adapters>=0.2,<1",
     "mcp>=1.24,<2.0.0a0",
     # The framework-neutral core (ABI loader, /v1 facade, CLI). Brings fastapi,

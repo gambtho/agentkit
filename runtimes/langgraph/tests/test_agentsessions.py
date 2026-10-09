@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hashlib
 import os
 from contextlib import asynccontextmanager
@@ -12,9 +13,10 @@ import openai
 import pytest
 import yaml
 from langchain_core.caches import BaseCache
-from langchain_core.globals import get_llm_cache, set_llm_cache
+from langchain_core.globals import get_debug, get_llm_cache, get_verbose, set_debug, set_llm_cache, set_verbose
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration
+from langchain_core.runnables import RunnableLambda
 from langsmith import Client, tracing_context
 
 from agentkit_serve import agent_factory
@@ -181,6 +183,87 @@ def test_empty_host_completion_is_not_retried_or_duplicated(binding):
         async with live(binding) as stub:
             _, end = await turn(stub, inputs=["hello"], reply="")
             assert end.end.state == "COMPLETED"
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("debug", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_global_console_settings_stay_enabled_without_exporting_agentsessions(binding, capsys, debug, nested):
+    binding.spec.instructions = "private-baked-instructions-marker"
+    previous_debug, previous_verbose = get_debug(), get_verbose()
+    set_debug(debug)
+    set_verbose(True)
+
+    async def check():
+        history = [c.Event(kind=c.EVENT_INPUT, message=text("user", "private-history-marker"))]
+        async def runner(binding, request, exchange):
+            if nested:
+                async def invoke(_):
+                    return await hook()(binding, request, exchange)
+                return await RunnableLambda(invoke).ainvoke("ordinary-parent-input")
+            return await hook()(binding, request, exchange)
+
+        async with live(binding, runner) as stub:
+            _, end = await turn(
+                stub, inputs=["private-input-marker"], history=history,
+                reply="private-host-output-marker",
+            )
+            assert end.end.state == "COMPLETED"
+            assert get_debug() is debug
+            assert get_verbose() is True
+        captured = capsys.readouterr()
+        assert not any(marker in captured.out + captured.err for marker in [
+            "private-baked-instructions-marker", "private-history-marker",
+            "private-input-marker", "private-host-output-marker",
+        ])
+        # Other protocols and tasks must retain the ambient debug behavior.
+        if debug:
+            await RunnableLambda(lambda value: value).ainvoke("ordinary-debug-control")
+            assert "ordinary-debug-control" in capsys.readouterr().out
+        assert get_debug() is debug
+        assert get_verbose() is True
+
+    try:
+        asyncio.run(check())
+    finally:
+        set_debug(previous_debug)
+        set_verbose(previous_verbose)
+
+
+def test_parent_graph_checkpoints_do_not_persist_agentsessions(binding):
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import StateGraph
+
+    binding.spec.instructions = "private-baked-instructions-marker"
+    saver = InMemorySaver()
+
+    async def runner(binding, request, exchange):
+        async def invoke(_):
+            await hook()(binding, request, exchange)
+            return {"ordinary": "parent-finished"}
+
+        graph = StateGraph(dict)
+        graph.add_node("invoke", invoke)
+        graph.set_entry_point("invoke")
+        graph.set_finish_point("invoke")
+        parent = graph.compile(checkpointer=saver)
+        await parent.ainvoke(
+            {"ordinary": "parent-input"},
+            config={"configurable": {"thread_id": "ordinary-parent-thread"}},
+        )
+
+    async def check():
+        async with live(binding, runner) as stub:
+            _, end = await turn(stub, inputs=["private-input-marker"], reply="private-host-output-marker")
+            assert end.end.state == "COMPLETED"
+        checkpoints = list(saver.list(None))
+        assert checkpoints
+        payload = repr([item.checkpoint for item in checkpoints])
+        assert "parent-input" in payload and "parent-finished" in payload
+        assert not any(marker in payload for marker in [
+            "private-baked-instructions-marker", "private-input-marker", "private-host-output-marker",
+        ])
 
     asyncio.run(check())
 
@@ -533,3 +616,29 @@ def test_unsupported_start_content_and_options_emit_no_model_effect(binding, sta
             assert end.end.state == "COMPLETED"
 
     asyncio.run(check())
+
+
+def test_sdk_debug_diagnostics_do_not_export_execution_content(binding, caplog):
+    logger = logging.getLogger("openai._base_client")
+    caplog.set_level(logging.DEBUG, logger="openai")
+    filters = list(logger.filters)
+    binding.spec.instructions = "private-sdk-instructions-marker"
+
+    async def check():
+        history = [c.Event(kind=c.EVENT_INPUT, message=text("user", "private-sdk-history-marker"))]
+        async with live(binding) as stub:
+            _, end = await turn(
+                stub, inputs=["private-sdk-input-marker"], history=history,
+                reply="private-sdk-output-marker",
+            )
+            assert end.end.state == "COMPLETED"
+
+    asyncio.run(check())
+    assert not any(marker in "\n".join(caplog.messages) for marker in [
+        "private-sdk-instructions-marker", "private-sdk-history-marker",
+        "private-sdk-input-marker", "private-sdk-output-marker",
+    ])
+    assert logger.filters == filters
+    assert logger.getEffectiveLevel() == logging.DEBUG
+    logger.debug("ordinary-sdk-debug-control")
+    assert "ordinary-sdk-debug-control" in caplog.messages
