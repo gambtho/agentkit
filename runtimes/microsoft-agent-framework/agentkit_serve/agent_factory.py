@@ -78,9 +78,25 @@ _DEFAULT_SEARCH_AUDIENCE = "https://search.azure.com/.default"
 _DEFAULT_FOUNDRY_AUDIENCE = "https://ai.azure.com/.default"
 _DEFAULT_MCP_REQUEST_TIMEOUT = 120
 _DEFAULT_SESSION_CACHE_MAX = 256
+class _RunFailure:
+    """The error that ends a run, shared by its concurrent tool calls."""
+
+    def __init__(self) -> None:
+        self.signal: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.error: AgentRunError | None = None
+
+    def record(self, error: AgentRunError) -> None:
+        # The first failure ends the run, but a sibling call that then finds
+        # its session dead must still mark the runtime unhealthy.
+        if self.error is None or (error.fatal and not self.error.fatal):
+            self.error = error
+        if not self.signal.done():
+            self.signal.set_result(None)
+
+
 # Invocation tasks share a fatal-error signal with their run owner. Concurrent
 # Sessions on the same Agent have independent signals.
-_run_failure: ContextVar[asyncio.Future[AgentRunError] | None] = ContextVar("agentkit_maf_run_failure", default=None)
+_run_failure: ContextVar[_RunFailure | None] = ContextVar("agentkit_maf_run_failure", default=None)
 _ORKA_TOOL_ERROR_CONTEXT_KEY = "agentkit_orka_tool_error"
 
 
@@ -90,8 +106,8 @@ def _fail_run(message: str, *, code: str | None = None) -> None:
 
 def _fail_run_with(error: AgentRunError) -> None:
     failure = _run_failure.get()
-    if failure is not None and not failure.done():
-        failure.set_result(error)
+    if failure is not None:
+        failure.record(error)
 
 
 def _mcp_request_timeout() -> int:
@@ -407,8 +423,8 @@ class _MCPFailureMiddleware(FunctionMiddleware):
         self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]
     ) -> None:
         failure = _run_failure.get()
-        if failure is not None and failure.done():
-            raise MiddlewareTermination(str(failure.result()))
+        if failure is not None and failure.error is not None:
+            raise MiddlewareTermination(str(failure.error))
         try:
             await call_next()
         except _OrkaToolError as exc:
@@ -879,7 +895,7 @@ async def run_agent(
     kwargs = {}
     if request.on_tool_event is not None:
         kwargs["middleware"] = [_ToolEventMiddleware(request.on_tool_event)]
-    failure: asyncio.Future[AgentRunError] = asyncio.get_running_loop().create_future()
+    failure = _RunFailure()
     token = _run_failure.set(failure)
 
     async def execute():
@@ -891,8 +907,8 @@ async def run_agent(
             # MiddlewareTermination stops the next model step, but supported
             # MAF versions first join all calls in the current batch. Cancel
             # and join the SDK run so a fatal call also stops pending siblings.
-            await asyncio.wait((running, failure), return_when=asyncio.FIRST_COMPLETED)
-            if not failure.done():
+            await asyncio.wait((running, failure.signal), return_when=asyncio.FIRST_COMPLETED)
+            if failure.error is None:
                 try:
                     result = await running
                 except Exception as exc:  # noqa: BLE001 — normalized for the façade
@@ -900,9 +916,9 @@ async def run_agent(
         finally:
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
-        if failure.done():
-            raise failure.result()
+        if failure.error is not None:
+            raise failure.error
         return RunResult(text=_result_text(result), usage=_result_usage(result))
     finally:
-        failure.cancel()
+        failure.signal.cancel()
         _run_failure.reset(token)
