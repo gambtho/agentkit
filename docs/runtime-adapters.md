@@ -93,8 +93,9 @@ URLs, and echoed credentials, so it never reaches the client:
 | Orka runtime session failed to start | 503 | `RuntimeStartFailed` |
 | Any other framework failure | 502 | `AgentRunFailed` |
 
-Foundry mode reports the same model codes with its `upstream_status` field, and
-Orka mode reports them in `TurnFailed` frames. Operators get a warning log for
+Foundry mode reports the same model codes with its `upstream_status` field; it
+reports other run failures as `RuntimeFailure` with a fixed message. Orka mode
+reports every code in `TurnFailed` frames. Operators get a warning log for
 each failure: the HTTP status for model HTTP errors, whose bodies may echo
 credentials; the exception types for MCP failures and Orka runtime startup
 failures; and a traceback otherwise.
