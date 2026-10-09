@@ -46,6 +46,63 @@ def test_exchange_correlates_serialized_effects_and_preserves_inputs(binding_fil
     asyncio.run(check())
 
 
+@pytest.mark.parametrize("prior_calls", [0, 1])
+def test_model_result_before_call_is_emitted_fails_closed(binding_file, prior_calls):
+    async def check():
+        from agentkit_serve_common.agentsessions._generated import common_pb2 as c
+        from agentkit_serve_common.agentsessions._generated import harness_pb2 as h
+        from agentkit_serve_common.agentsessions.service import HarnessService
+        from test_agentsessions_protocol import protocol
+
+        p = protocol()
+        queued = asyncio.Event()
+        cleaned = asyncio.Event()
+        emitted = asyncio.Queue()
+        replies = []
+
+        async def runner(binding, request, exchange):
+            try:
+                for _ in range(prior_calls):
+                    await exchange.call([text(c, "user", "observed call")])
+                # call() queues its effect before yielding to the waiting reader.
+                # The reader resumes before Connect can emit that queued effect.
+                queued.set()
+                replies.append(await exchange.call([text(c, "user", "unobserved call")]))
+            finally:
+                cleaned.set()
+
+        async def frames():
+            yield h.ControllerFrame(execution_id="exec-1", start=h.Start())
+            for _ in range(prior_calls):
+                call_id = await emitted.get()
+                yield h.ControllerFrame(
+                    execution_id="exec-1",
+                    model=h.ModelResult(model_call_id=call_id, message=text(c, "assistant", "observed reply")),
+                )
+            await queued.wait()
+            yield h.ControllerFrame(
+                execution_id="exec-1",
+                model=h.ModelResult(model_call_id=f"model-{prior_calls + 1}", message=text(c, "assistant", "early reply")),
+            )
+            await asyncio.Future()
+
+        binding = p.load_verified_agentsessions_binding(binding_file[0])
+        service = HarnessService(binding, runner=runner)
+        events = []
+        async def consume():
+            async for event in service.Connect(frames(), None):
+                events.append(event)
+                if event.kind == c.EVENT_MODEL_CALL:
+                    emitted.put_nowait(event.model.id)
+        await asyncio.wait_for(consume(), 3)
+        terminal(events, c, "FAILED", 3)
+        assert [event.kind for event in events] == [c.EVENT_MODEL_CALL] * prior_calls + [c.EVENT_END]
+        assert replies == []
+        assert cleaned.is_set()
+
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize("control", ["wrong-call", "missing-message", "tool-role", "data", "reasoning", "wrong-model", "negative-usage", "empty-parts", "oversized-result", "wrong-execution", "wrong-session", "duplicate", "tool", "unknown", "cancel", "eof"])
 def test_pending_effect_reader_fails_closed_and_releases(binding_file, control):
     async def check():

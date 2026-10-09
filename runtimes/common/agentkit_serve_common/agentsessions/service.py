@@ -225,7 +225,11 @@ class HarnessService(harness_pb2_grpc.HarnessServicer):
                 # Control failure wins over queued effects or concurrent completion.
                 if reader.done() or execution.done():
                     break
-                yield outgoing.result()
+                event = outgoing.result()
+                # No await between marking and yielding: the receiver must not
+                # accept a guessed reply while the model call is still queued.
+                exchange.mark_emitted(event.model.id)
+                yield event
                 outgoing = asyncio.create_task(exchange.events.get())
             result = None
             if reader.done():

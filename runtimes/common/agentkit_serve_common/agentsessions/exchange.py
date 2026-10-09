@@ -32,6 +32,7 @@ class ExecutionExchange:
         self.events: asyncio.Queue[common.Event] = asyncio.Queue(maxsize=1)
         self._pending: asyncio.Future[common.Message] | None = None
         self._call_id = ""
+        self._emitted = False
         self._counter = 0
         self._closed = False
 
@@ -58,10 +59,17 @@ class ExecutionExchange:
             pending.cancel()
             self._pending = None
             self._call_id = ""
+            self._emitted = False
+
+    def mark_emitted(self, call_id: str) -> None:
+        """Called immediately before the service yields the pending model call."""
+        if self._pending is None or call_id != self._call_id:
+            raise ValueError("unexpected model call")
+        self._emitted = True
 
     def accept(self, result: harness.ModelResult) -> None:
         pending = self._pending
-        if pending is None or pending.done() or result.model_call_id != self._call_id:
+        if pending is None or pending.done() or not self._emitted or result.model_call_id != self._call_id:
             raise ValueError("unexpected model result")
         if not result.HasField("message") or not result.message.parts:
             raise ValueError("model result message required")
