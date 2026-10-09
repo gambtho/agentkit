@@ -157,7 +157,11 @@ Both modes accept an optional adapter argument; `maf` aliases
 `microsoft-agent-framework`. Each live adapter must produce a real model response,
 return an exact MCP tool receipt, continue the same session with a second
 successful prompt, and cancel during a blocking tool.
-Offline scenarios remain the deterministic failure and deadline checks.
+The live provider bridge removes the OpenAI `strict` tool-schema hint because
+LocalAI 4.10 treats it as forced tool-only generation even with automatic tool
+choice. Tool definitions and parameters, provider history, and v2 assertions
+remain unchanged. Offline scenarios remain the deterministic failure and
+deadline checks.
 Readiness and inference errors fail the live run; CI does not skip live coverage
 based on repository secrets.
 

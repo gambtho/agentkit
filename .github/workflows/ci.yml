@@ -47,6 +47,7 @@ jobs:
           bash -n scripts/generate-agentsessions-stubs.sh
           shellcheck scripts/generate-agentsessions-stubs.sh
           test -z "$(gofmt -l test/orka-harness-v2/probe/*.go)"
+          go test test/orka-harness-v2/probe/localai.go test/orka-harness-v2/probe/localai_test.go
           for script in \
             deploy/foundry/doctor.sh \
             deploy/foundry/toolbox/setup.sh \
