@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest import mock
@@ -297,6 +298,15 @@ def test_resolve_tool_headers_missing_value_env_fails_secret_free():
     assert "do-not-mention" not in msg
 
 
+def test_workload_identity_token_command_failure_hides_command_line():
+    command = f"{shlex.quote(sys.executable)} -c 'raise SystemExit(1)' --client-secret command-line-secret"
+    with mock.patch.dict(os.environ, {"AGENTKIT_WORKLOAD_IDENTITY_TOKEN_COMMAND": command}, clear=True):
+        with pytest.raises(support.AgentBuildError, match="CalledProcessError$") as exc_info:
+            support.resolve_workload_identity_token("https://ai.azure.com/.default")
+
+    assert "command-line-secret" not in str(exc_info.value)
+
+
 def test_resolve_workload_identity_token_uses_explicit_runtime_hook():
     tool = _remote_tool(auth={"type": "workload-identity-token", "audience": "https://ai.azure.com/.default"})
     with mock.patch.dict(os.environ, {"AGENTKIT_WORKLOAD_IDENTITY_TOKEN": "workload-token"}, clear=True):
@@ -410,9 +420,10 @@ def test_default_azure_credential_fallback_closes_after_failure_without_masking_
         mock.patch.dict(os.environ, {}, clear=True),
         mock.patch.dict(sys.modules, _fake_azure_identity_module(FakeCredential)),
     ):
-        with pytest.raises(support.AgentBuildError, match="token unavailable") as exc_info:
+        with pytest.raises(support.AgentBuildError, match="RuntimeError$") as exc_info:
             support.resolve_workload_identity_token("https://ai.azure.com/.default")
 
+    assert "token unavailable" not in str(exc_info.value)
     assert exc_info.value.__cause__ is acquisition_error
     assert len(instances) == 1
     assert instances[0].closed is True

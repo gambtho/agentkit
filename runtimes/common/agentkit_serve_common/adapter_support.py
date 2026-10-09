@@ -400,8 +400,10 @@ def resolve_workload_identity_token(audience: str, env: Mapping[str, str] | None
                 timeout=30,
             )
         except (OSError, subprocess.SubprocessError) as exc:
+            # The exception text holds the full command line, which can carry
+            # secrets; Orka streams build errors, so name the failure type only.
             raise AgentBuildError(
-                f"workload identity token command failed for audience {audience!r}: {exc}"
+                f"workload identity token command failed for audience {audience!r}: {exc.__class__.__name__}"
             ) from exc
         token = completed.stdout.strip()
         if not token:
@@ -425,7 +427,7 @@ def resolve_workload_identity_token(audience: str, env: Mapping[str, str] | None
         error: BaseException
         if isinstance(exc, Exception):
             error = AgentBuildError(
-                f"workload identity token acquisition failed for audience {audience!r}: {exc}"
+                f"workload identity token acquisition failed for audience {audience!r}: {exc.__class__.__name__}"
             )
         else:
             error = exc
@@ -443,7 +445,7 @@ def resolve_workload_identity_token(audience: str, env: Mapping[str, str] | None
         identity_client.close()
     except Exception as exc:  # noqa: BLE001 - normalize provider failures.
         raise AgentBuildError(
-            f"workload identity credential cleanup failed for audience {audience!r}: {exc}"
+            f"workload identity credential cleanup failed for audience {audience!r}: {exc.__class__.__name__}"
         ) from exc
     return value
 
