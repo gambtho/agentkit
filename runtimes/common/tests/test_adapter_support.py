@@ -5,6 +5,8 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest import mock
 
+import anyio
+import httpx
 import pytest
 
 from agentkit_serve_common import adapter_support as support
@@ -162,15 +164,70 @@ def test_upstream_status_code_handles_cycles():
     assert support.upstream_status_code(exc) == 502
 
 
-def test_normalize_agent_run_error_preserves_code_and_status():
-    class Unavailable(Exception):
-        status_code = 503
+@pytest.mark.parametrize(
+    ("upstream", "status", "code", "message"),
+    [
+        (401, 503, "ModelAuthRejected", "model service rejected configured credentials"),
+        (403, 503, "ModelAuthRejected", "model service rejected configured credentials"),
+        (429, 503, "ModelUnavailable", "model service is unavailable"),
+        (500, 503, "ModelUnavailable", "model service is unavailable"),
+        (400, 502, "ModelUpstreamError", "model service request failed"),
+    ],
+)
+def test_normalize_agent_run_error_maps_upstream_status_without_upstream_text(upstream, status, code, message):
+    class SDKStatusError(Exception):
+        status_code = upstream
 
-    err = support.normalize_agent_run_error(Unavailable("upstream down"))
-    assert isinstance(err, AgentRunError)
-    assert err.status == 503
-    assert err.code == "Unavailable"
-    assert "upstream down" in str(err)
+    class FrameworkError(Exception):
+        pass
+
+    wrapped = FrameworkError("framework wrapper sk-echoed-secret")
+    wrapped.__cause__ = SDKStatusError("Error code: 401 - {'message': 'bad key Bearer sk-echoed-secret'}")
+    err = support.normalize_agent_run_error(wrapped)
+    assert (err.status, err.code, str(err)) == (status, code, message)
+    assert err.upstream_status == upstream
+
+
+def test_normalize_agent_run_error_maps_transport_and_unknown_failures():
+    transport = RuntimeError("connection to https://user:pass@model.example failed")
+    transport.__cause__ = httpx.ConnectError("https://user:pass@model.example")
+    err = support.normalize_agent_run_error(transport)
+    assert (err.status, err.code, str(err)) == (502, "ModelUpstreamError", "model service request failed")
+
+    err = support.normalize_agent_run_error(TypeError("'NoneType' object is not iterable: private-response"))
+    assert (err.status, err.code, str(err)) == (502, "AgentRunFailed", "agent run failed")
+
+
+def test_normalize_agent_run_error_keeps_runtime_owned_errors():
+    owned = AgentRunError("MCP tool protocol failed", status=502, code="MCPToolProtocolError")
+    assert support.normalize_agent_run_error(owned) is owned
+
+    wrapped = RuntimeError("framework wrapper")
+    wrapped.__cause__ = owned
+    assert support.normalize_agent_run_error(wrapped) is owned
+
+    fatal = AgentRunError("MCP tool protocol failed", code="MCPToolProtocolError", fatal=True)
+    group = ExceptionGroup("parallel tools", [owned, fatal])
+    assert support.normalize_agent_run_error(group) is fatal
+
+
+def test_mcp_tool_protocol_error_is_fatal_only_for_closed_stdio_sessions():
+    class ErrorData:
+        code = -32000
+
+    class McpError(Exception):
+        error = ErrorData()
+
+    closed = McpError("Connection closed")
+    wrapped_closed = RuntimeError("tool failed")
+    wrapped_closed.__context__ = anyio.ClosedResourceError()
+    timeout = TimeoutError("read timed out")
+
+    for exc in (closed, wrapped_closed):
+        err = support.mcp_tool_protocol_error(exc, stdio=True)
+        assert (err.code, str(err), err.fatal) == ("MCPToolProtocolError", "MCP tool protocol failed", True)
+        assert not support.mcp_tool_protocol_error(exc, stdio=False).fatal
+    assert not support.mcp_tool_protocol_error(timeout, stdio=True).fatal
 
 
 def _remote_tool(**overrides) -> ToolSpec:

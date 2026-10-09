@@ -203,6 +203,13 @@ servers continue to execute inside the runtime; Orka observes the run and remain
 responsible for policy, approvals, trust tiers, Tool CRDs, idempotency, and
 side-effect governance.
 
+Orka sends only the new prompt for each turn. AgentKit keeps the completed
+user/assistant turns of each `runtimeSessionID` and passes them to the runtime as
+history, so every runtime adapter continues a session the same way. Failed and
+cancelled turns are not added. If a run reports a fatal runtime failure, such as
+a stdio MCP tool subprocess exiting, the next turn in that runtime session builds
+a fresh runtime with the same history.
+
 Current AgentKit Serve Orka support is **observed mode by default**. The default
 capability response intentionally omits `brokeredToolClasses` and
 `supportsContinuation`. Brokered read, write, and coordination are implemented

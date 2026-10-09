@@ -93,6 +93,10 @@ Python tests cover:
 
 - ABI reader validation,
 - OpenAI façade conformance shared by every adapter,
+- wire-level parity shared by every adapter: each adapter's real runtime runs
+  against a scripted loopback model and a stdio MCP fixture, and must send the
+  same conversation and tool results to the model, return the same results and
+  normalized errors, and keep secret canaries out of client-visible output,
 - conversation normalization,
 - runtime lifecycle startup/shutdown,
 - tool env allowlist behavior,

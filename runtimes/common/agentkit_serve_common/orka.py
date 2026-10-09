@@ -15,7 +15,7 @@ import json
 import os
 import re
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import quote
@@ -24,7 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from .config import AgentSpec
-from .conversation import RunRequest
+from .conversation import ConversationTurn, RunRequest
 from .runtime import (
     AgentRunError,
     BrokeredRuntimeSession,
@@ -80,6 +80,11 @@ class ActiveRuntime:
     context: Any
     session: Any
     env: dict[str, str]
+    # Orka sends only the new prompt, so the harness owns each runtime session's
+    # committed user/assistant transcript, as the ACP child does.
+    history: list[ConversationTurn] = field(default_factory=list)
+    # A fatal run failure means the next turn must rebuild this runtime.
+    broken: bool = False
 
 
 @contextmanager
@@ -448,7 +453,7 @@ async def _append_terminal_if_missing(
     failed: Mapping[str, Any] | None = None,
     completed: Mapping[str, Any] | None = None,
     error: Mapping[str, Any] | None = None,
-) -> None:
+) -> bool:
     _, created = await state.append(
         event_type,
         severity="error" if event_type == "TurnFailed" else "info",
@@ -460,6 +465,7 @@ async def _append_terminal_if_missing(
     )
     if created:
         _record_terminal_turn(state.turn_id, terminal_order, turns, max_terminal_turns)
+    return created
 
 
 def _ensure_terminal_on_task_done(
@@ -965,7 +971,7 @@ class OrkaToolBroker:
 
 
 async def _run_turn(
-    get_runtime: Callable[[RunRequest], Awaitable[Any]],
+    get_runtime: Callable[[RunRequest], Awaitable[ActiveRuntime]],
     turns: dict[str, TurnState],
     terminal_order: list[str],
     state: TurnState,
@@ -974,14 +980,19 @@ async def _run_turn(
     max_terminal_turns: int,
     brokered_tools: list[BrokeredToolDefinition] | None = None,
 ) -> None:
+    active: ActiveRuntime | None = None
+
     async def _run_with_runtime() -> RunResult:
-        runtime = await get_runtime(run_request)
+        nonlocal active
+        active = await get_runtime(run_request)
+        runtime = active.session
+        request = replace(run_request, history=tuple(active.history))
         with _scoped_process_env(run_request.env):
             if brokered_tools is not None:
                 if not isinstance(runtime, BrokeredRuntimeSession):
                     raise AgentRunError("runtime does not support brokered Orka tools", status=400, code="BrokeredUnsupported")
-                return await runtime.run_brokered(run_request, brokered_tools, OrkaToolBroker(state, brokered_tools))
-            return await runtime.run(run_request)
+                return await runtime.run_brokered(request, brokered_tools, OrkaToolBroker(state, brokered_tools))
+            return await runtime.run(request)
 
     try:
         if run_request.deadline is None:
@@ -1015,6 +1026,8 @@ async def _run_turn(
         )
         return
     except AgentRunError as exc:
+        if exc.fatal and active is not None:
+            active.broken = True
         code = exc.code or exc.__class__.__name__
         await _append_terminal_if_missing(
             state,
@@ -1073,7 +1086,7 @@ async def _run_turn(
                 content_text=result.text,
                 metadata={},
             )
-        await _append_terminal_if_missing(
+        completed = await _append_terminal_if_missing(
             state,
             terminal_order,
             turns,
@@ -1082,6 +1095,9 @@ async def _run_turn(
             summary="turn completed",
             completed={"result": result.text},
         )
+        if completed and active is not None:
+            active.history.append(ConversationTurn(role="user", text=run_request.prompt))
+            active.history.append(ConversationTurn(role="assistant", text=result.text))
     except _SSEFrameTooLargeError as exc:
         await _append_output_failure(
             state,
@@ -1239,17 +1255,20 @@ def create_orka_app(
             if evicted is not None:
                 await close_runtime(evict_id, evicted)
 
-    async def get_runtime(run_request: RunRequest) -> Any:
+    async def get_runtime(run_request: RunRequest) -> ActiveRuntime:
         runtime_session_id = run_request.session_id or ""
         active = active_runtimes.get(runtime_session_id)
+        history: list[ConversationTurn] = []
         if active is not None:
-            if active.env == dict(run_request.env):
+            if active.env == dict(run_request.env) and not active.broken:
                 if runtime_session_id in runtime_order:
                     runtime_order.remove(runtime_session_id)
                 runtime_order.append(runtime_session_id)
-                return active.session
+                return active
             if close_failure := new_runtime_close_failure():
                 raise close_failure
+            # Rebuilding the runtime keeps the session's conversation.
+            history = active.history
             active_runtimes.pop(runtime_session_id, None)
             if runtime_session_id in runtime_order:
                 runtime_order.remove(runtime_session_id)
@@ -1262,9 +1281,10 @@ def create_orka_app(
         with _scoped_process_env(run_request.env):
             context = factory.build_runtime(spec)
             session = await context.__aenter__()
-        active_runtimes[runtime_session_id] = ActiveRuntime(context=context, session=session, env=dict(run_request.env))
+        active = ActiveRuntime(context=context, session=session, env=dict(run_request.env), history=history)
+        active_runtimes[runtime_session_id] = active
         runtime_order.append(runtime_session_id)
-        return session
+        return active
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

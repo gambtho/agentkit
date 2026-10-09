@@ -20,8 +20,12 @@ from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Mapping, TypeVar
 
+import anyio
+from httpx import TransportError
+
 from .config import AgentSpec, ToolSpec
 from .conversation import FORWARDED_ROLES
+from .model_errors import normalized_model_http_error
 from .runtime import AgentRunError
 
 # Placeholder API key for OpenAI-compatible endpoints that need no auth (many
@@ -509,6 +513,23 @@ def positive_int_env(name: str = MCP_TIMEOUT_ENV, *, default: int | None, env: M
     return val if val > 0 else default
 
 
+def _exception_chain(exc: BaseException):
+    """Yield a bounded walk of an exception, its wrapped causes, and group members."""
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending and len(seen) < 32:  # bounded; guards against pathological cycles
+        cur = pending.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        yield cur
+        if isinstance(cur, BaseExceptionGroup):
+            pending.extend(reversed(cur.exceptions))
+        nested = getattr(cur, "inner_exception", None) or cur.__cause__ or cur.__context__
+        if isinstance(nested, BaseException):
+            pending.append(nested)
+
+
 def upstream_status_code(exc: BaseException, *, default: int = 502) -> int:
     """Best-effort upstream HTTP status from a framework/model exception.
 
@@ -518,23 +539,55 @@ def upstream_status_code(exc: BaseException, *, default: int = 502) -> int:
     own exception and store the original as ``inner_exception`` or as the normal
     exception cause/context, so this walks the bounded exception chain.
     """
-    seen: set[int] = set()
-    cur: BaseException | None = exc
-    for _ in range(10):  # bounded walk; guards against pathological cycles
-        if cur is None or id(cur) in seen:
-            break
-        seen.add(id(cur))
+    for cur in _exception_chain(exc):
         code = getattr(cur, "status_code", None)
         if isinstance(code, int) and 400 <= code <= 599:
             return code
-        cur = getattr(cur, "inner_exception", None) or cur.__cause__ or cur.__context__
     return default
 
 
-def normalize_agent_run_error(exc: Exception) -> AgentRunError:
-    """Convert an adapter/framework exception into the common façade error."""
+def normalize_agent_run_error(exc: BaseException) -> AgentRunError:
+    """Convert an adapter/framework exception into the common façade error.
+
+    Framework and model SDK messages can carry upstream response bodies, URLs,
+    and echoed credentials, so only runtime-owned messages and codes cross into
+    protocol responses. Runtime-owned ``AgentRunError`` values pass through.
+    """
+    chain = list(_exception_chain(exc))
+    owned = [cur for cur in chain if isinstance(cur, AgentRunError)]
+    if owned:
+        return next((cur for cur in owned if cur.fatal), owned[0])
+    status = upstream_status_code(exc, default=0)
+    if status:
+        return normalized_model_http_error(status)
+    if any(isinstance(cur, TransportError) for cur in chain):
+        return AgentRunError("model service request failed", status=502, code="ModelUpstreamError")
+    return AgentRunError("agent run failed", status=502, code="AgentRunFailed")
+
+
+# mcp.types.CONNECTION_CLOSED; the shared core cannot import the MCP SDK.
+_MCP_CONNECTION_CLOSED = -32000
+
+
+def mcp_session_closed(exc: BaseException) -> bool:
+    """Whether an MCP client failure means its transport is gone for good."""
+    for cur in _exception_chain(exc):
+        if isinstance(cur, (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream)):
+            return True
+        if type(cur).__name__ == "McpError" and getattr(getattr(cur, "error", None), "code", None) == _MCP_CONNECTION_CLOSED:
+            return True
+    return False
+
+
+def mcp_tool_protocol_error(exc: BaseException | None = None, *, stdio: bool = False) -> AgentRunError:
+    """Secret-free run error for an MCP failure that is not an admitted tool error.
+
+    Stdio tool sessions are entered once for the runtime lifespan, so a closed
+    stdio transport is fatal; remote tools reconnect per request.
+    """
     return AgentRunError(
-        f"agent run failed: {exc}",
-        status=upstream_status_code(exc),
-        code=exc.__class__.__name__,
+        "MCP tool protocol failed",
+        status=502,
+        code="MCPToolProtocolError",
+        fatal=stdio and exc is not None and mcp_session_closed(exc),
     )

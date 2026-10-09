@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import agentkit_serve_common.orka as orka_module
 from agentkit_serve_common.config import AgentSpec
-from agentkit_serve_common.conversation import RunRequest
+from agentkit_serve_common.conversation import ConversationTurn, RunRequest
 from agentkit_serve_common.orka import ORKA_HARNESS_VERSION, create_orka_app
 from agentkit_serve_common.runtime import (
     AgentRunError,
@@ -2425,3 +2425,82 @@ def test_orka_brokered_late_continue_after_cancel_is_rejected():
 def test_orka_brokered_mode_does_not_advertise_or_fall_back_to_direct_runtime_run():
     with pytest.raises(ValueError, match="requires a runtime factory that supports brokered tools"):
         create_orka_app(_spec(), EchoFactory(), "test-token", enable_brokered_read=True)
+
+
+class ScriptedRuntime:
+    def __init__(self, *outcomes: str | BaseException) -> None:
+        self.outcomes = list(outcomes)
+        self.requests: list[RunRequest] = []
+        self.closed = False
+
+    async def __aenter__(self) -> RuntimeSession:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        self.closed = True
+        return None
+
+    async def run(self, request: RunRequest) -> RunResult:
+        self.requests.append(request)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return RunResult(text=outcome)
+
+
+class ScriptedFactory:
+    def __init__(self, *runtimes: ScriptedRuntime) -> None:
+        self.runtimes = list(runtimes)
+
+    def build_runtime(self, spec: AgentSpec) -> RuntimeSession:
+        return self.runtimes.pop(0)
+
+
+def _run_prompt(client: TestClient, turn_id: str, prompt: str, runtime_session_id: str = "runtime-session-1") -> dict[str, Any]:
+    _create_turn(
+        client,
+        turnID=turn_id,
+        runtimeSessionID=runtime_session_id,
+        input={"prompt": prompt, "contextRefs": [], "env": []},
+    )
+    return _frames(client.get(f"/v1/turns/{turn_id}/events", headers=AUTH).text)[-1]
+
+
+def test_orka_runtime_session_history_carries_only_completed_turns():
+    session = ScriptedRuntime("a1", AgentRunError("model service is unavailable", status=503, code="ModelUnavailable"), "a3")
+    other = ScriptedRuntime("b1")
+    app = create_orka_app(_spec(), ScriptedFactory(session, other), auth_token="test-token")
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-2", "q2")["failed"]["reason"] == "ModelUnavailable"
+        assert _run_prompt(client, "turn-3", "q3")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-4", "o1", runtime_session_id="runtime-session-2")["type"] == "TurnCompleted"
+
+    committed = (ConversationTurn(role="user", text="q1"), ConversationTurn(role="assistant", text="a1"))
+    assert [request.history for request in session.requests] == [(), committed, committed]
+    assert other.requests[0].history == ()
+
+
+def test_orka_fatal_run_failure_rebuilds_runtime_and_keeps_history():
+    broken = ScriptedRuntime("a1", AgentRunError("MCP tool protocol failed", code="MCPToolProtocolError", fatal=True))
+    rebuilt = ScriptedRuntime("a3")
+    app = create_orka_app(_spec(), ScriptedFactory(broken, rebuilt), auth_token="test-token")
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-2", "q2")["failed"]["reason"] == "MCPToolProtocolError"
+        assert _run_prompt(client, "turn-3", "q3")["type"] == "TurnCompleted"
+        health = client.get("/v1/health").json()
+
+    assert broken.closed
+    assert rebuilt.requests[0].history == (
+        ConversationTurn(role="user", text="q1"),
+        ConversationTurn(role="assistant", text="a1"),
+    )
+    assert (health["status"], health["ready"]) == ("ok", True)
