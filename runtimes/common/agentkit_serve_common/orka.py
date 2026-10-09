@@ -1156,7 +1156,9 @@ def create_orka_app(
         raise ValueError("Orka mode requires a bearer auth token")
     retention_limit = _max_terminal_turns(max_terminal_turns)
     runtime_session_limit = _max_runtime_sessions(max_runtime_sessions)
-    history_limit = _max_session_histories(max_session_histories)
+    # Sessions with a live runtime always keep their transcripts, so a smaller
+    # history limit could not be honored.
+    history_limit = max(_max_session_histories(max_session_histories), runtime_session_limit)
     brokered_classes: set[str] = set()
     if _brokered_read_enabled(enable_brokered_read):
         brokered_classes.add(BROKERED_CLASS_READ)
@@ -1354,6 +1356,7 @@ def create_orka_app(
     async def lifespan(app: FastAPI):
         app.state.turns = turns
         app.state.active_runtimes = active_runtimes
+        app.state.session_histories = session_histories
         try:
             yield
         finally:

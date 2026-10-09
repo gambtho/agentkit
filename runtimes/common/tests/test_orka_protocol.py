@@ -2602,3 +2602,19 @@ def test_orka_session_history_retention_is_bounded():
         assert _run_prompt(client, "turn-3", "q2")["type"] == "TurnCompleted"
 
     assert reopened.requests[0].history == ()
+
+
+def test_orka_session_history_limit_never_drops_live_sessions():
+    runtimes = [ScriptedRuntime(text) for text in ("a1", "b1", "c1")]
+    app = create_orka_app(_spec(), ScriptedFactory(*runtimes), auth_token="test-token", max_runtime_sessions=2, max_session_histories=1)
+
+    with TestClient(app) as client:
+        for index in (1, 2, 3):
+            session = f"runtime-session-{index}"
+            assert _run_prompt(client, f"turn-{index}", f"q{index}", runtime_session_id=session)["type"] == "TurnCompleted"
+        retained = list(client.app.state.session_histories)
+        live = set(client.app.state.active_runtimes)
+
+    # The limit rises to the runtime session limit; the evicted session goes.
+    assert retained == ["runtime-session-2", "runtime-session-3"]
+    assert live == set(retained)
