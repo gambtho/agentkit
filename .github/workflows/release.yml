@@ -95,6 +95,17 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
 
+      - name: Verify image index
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          cosign verify \
+            --certificate-identity "$CERTIFICATE_IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE@$DIGEST"
+
   release:
     name: Promote images and create GitHub Release
     needs: images
