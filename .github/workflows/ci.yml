@@ -421,9 +421,13 @@ jobs:
           orka_smoke agentkit-smoke-orka hello-agent:ci 18083
 
   live-aikit-e2e:
-    name: Live AIKit E2E
+    name: Live AIKit E2E (${{ matrix.adapter }})
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [pydantic-ai, microsoft-agent-framework, langgraph]
     env:
       PLATFORM: linux/amd64
       BUILDER: ""
@@ -475,7 +479,9 @@ jobs:
           echo "BUILDER=" >> "$GITHUB_ENV"
 
       - name: Run live AIKit-backed AgentKit E2E
-        run: bash scripts/live-aikit-agent-e2e.sh
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+        run: bash scripts/live-aikit-agent-e2e.sh "$ADAPTER"
 
   orka-v2-offline:
     name: Harness v2 E2E (${{ matrix.adapter }})
@@ -525,9 +531,13 @@ jobs:
           retention-days: 7
 
   orka-v2-live:
-    name: Live AIKit harness v2 E2E (microsoft-agent-framework)
+    name: Live AIKit harness v2 E2E (${{ matrix.adapter }})
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [pydantic-ai, microsoft-agent-framework, langgraph]
     env:
       PLATFORM: linux/amd64
       BUILDER: ""
@@ -554,14 +564,15 @@ jobs:
       - name: Run live composed harness v2 E2E
         timeout-minutes: 65
         env:
+          ADAPTER: ${{ matrix.adapter }}
           ARTIFACT_DIR: ${{ runner.temp }}/agentkit-orka-v2-live
-        run: bash scripts/orka-harness-v2-e2e.sh live
+        run: bash scripts/orka-harness-v2-e2e.sh live "$ADAPTER"
 
       - name: Upload safe live harness v2 results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: orka-v2-live-microsoft-agent-framework
+          name: orka-v2-live-${{ matrix.adapter }}
           path: ${{ runner.temp }}/agentkit-orka-v2-live
           if-no-files-found: warn
           retention-days: 7

@@ -124,13 +124,16 @@ The composed v2 checks build the current AgentKit frontend and agent images,
 layer Orka's production supervisor onto each immutable image, and exercise the
 real ACP, provider, and MCP paths. The normal PR/push offline matrix covers
 `pydantic-ai`, `microsoft-agent-framework`, and `langgraph` with deterministic
-local fixtures and no external model credentials. A separate live MAF lane runs the digest-pinned AIKit Qwen3.5-2B image on CPU
-and requires real model, tool, and session-continuation results.
+local fixtures and no external model credentials. The live matrix covers the
+same three adapters against the digest-pinned AIKit Qwen3.5-2B image on CPU,
+requiring real model, tool, continuation, and blocking-tool cancellation results.
 
 ```sh
 scripts/orka-harness-v2-e2e.sh offline
 scripts/orka-harness-v2-e2e.sh offline langgraph
 scripts/orka-harness-v2-e2e.sh live
+scripts/orka-harness-v2-e2e.sh live pydantic-ai
+scripts/orka-harness-v2-e2e.sh live langgraph
 ```
 
 Run these commands in a Linux shell on the Docker daemon's host, with a
@@ -160,7 +163,8 @@ uv run --directory runtimes/common --extra dev pytest -q tests/test_acp_protocol
 
 ## Live AIKit E2E
 
-`scripts/live-aikit-agent-e2e.sh` runs a real built MAF agent against the prebuilt
+`scripts/live-aikit-agent-e2e.sh` runs real built agents for all three adapters
+against the prebuilt
 `ghcr.io/kaito-project/aikit/qwen3.5:2b` image, pinned by digest in
 `scripts/aikit-e2e-common.sh`. No model API key or auth cache is required.
 
@@ -169,6 +173,10 @@ AIKIT_HOST_PORT=18089 \
 AGENTKIT_LIVE_HOST_PORT=18086 \
 TAG=e2e-script \
 scripts/live-aikit-agent-e2e.sh
+
+# Select one adapter, or omit the argument to run all three with one model server.
+scripts/live-aikit-agent-e2e.sh pydantic-ai
+scripts/live-aikit-agent-e2e.sh langgraph
 ```
 
 When `PLATFORM` is unset, the script selects the Docker daemon's Linux amd64 or

@@ -11,11 +11,11 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'USAGE'
 Usage: scripts/orka-harness-v2-e2e.sh offline [adapter]
-       scripts/orka-harness-v2-e2e.sh live
+       scripts/orka-harness-v2-e2e.sh live [adapter]
 
-Offline defaults to all adapters: pydantic-ai, microsoft-agent-framework, langgraph.
-Live uses microsoft-agent-framework with a digest-pinned local AIKit model.
-No external model credentials are required.
+Both modes default to all adapters: pydantic-ai, microsoft-agent-framework, langgraph.
+Use an adapter argument to select one; maf aliases microsoft-agent-framework.
+Live uses a digest-pinned local AIKit model without external model credentials.
 
 PLATFORM defaults to the Linux Docker daemon's architecture. BUILDER may select a
 docker-driver Buildx builder. ARTIFACT_DIR selects the parent for safe run results.
@@ -25,26 +25,20 @@ USAGE
 mode="${1:-offline}"
 case "$mode" in -h|--help) usage; exit 0 ;; esac
 [[ $# -le 2 ]] || die 'expected a mode and at most one adapter'
-adapters=()
 case "$mode" in
-  offline)
-    if [[ -n "${2:-}" ]]; then
-      case "$2" in
-        maf) adapters=(microsoft-agent-framework) ;;
-        pydantic-ai|microsoft-agent-framework|langgraph) adapters=("$2") ;;
-        *) die "unsupported adapter: $2" ;;
-      esac
-    else
-      adapters=(pydantic-ai microsoft-agent-framework langgraph)
-    fi
-    ;;
-  live)
-    [[ -z "${2:-}" || "${2:-}" == microsoft-agent-framework || "${2:-}" == maf ]] ||
-      die 'live mode currently supports microsoft-agent-framework only'
-    adapters=(microsoft-agent-framework)
-    ;;
+  offline|live) ;;
   *) usage >&2; die "unsupported mode: $mode" ;;
 esac
+adapters=()
+if [[ -n "${2:-}" ]]; then
+  case "$2" in
+    maf) adapters=(microsoft-agent-framework) ;;
+    pydantic-ai|microsoft-agent-framework|langgraph) adapters=("$2") ;;
+    *) die "unsupported adapter: $2" ;;
+  esac
+else
+  adapters=(pydantic-ai microsoft-agent-framework langgraph)
+fi
 
 for command in curl docker git go jq make; do
   command -v "$command" >/dev/null 2>&1 || die "missing required command: $command"
@@ -289,7 +283,7 @@ run_adapter() {
   fixture="test/orka-harness-v2/agentkitfile-$adapter.yaml"
   model=gpt-4o-mini
   if [[ "$mode" == live ]]; then
-    fixture=test/orka-harness-v2/agentkitfile-live.yaml
+    fixture="test/orka-harness-v2/agentkitfile-$adapter-live.yaml"
     model="$aikit_model"
     timeout=900
     probe_args=(--upstream http://aikit:8080)

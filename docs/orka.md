@@ -108,8 +108,10 @@ Run the shared offline/live entrypoint from the AgentKit checkout:
 scripts/orka-harness-v2-e2e.sh offline
 scripts/orka-harness-v2-e2e.sh offline microsoft-agent-framework
 
-# Live uses Microsoft Agent Framework and a bundled local AIKit model.
+# Live defaults to all three adapters against a bundled local AIKit model.
 scripts/orka-harness-v2-e2e.sh live
+scripts/orka-harness-v2-e2e.sh live pydantic-ai
+scripts/orka-harness-v2-e2e.sh live langgraph
 ```
 
 Run in a Linux shell on the Docker daemon's host so the runner and daemon share
@@ -151,8 +153,10 @@ Live mode runs `ghcr.io/kaito-project/aikit/qwen3.5:2b`, pinned by digest in
 It requires no provider credentials and makes no external inference calls.
 `test/aikit-e2e/model.yaml` configures bounded CPU inference, greedy sampling,
 and native tool templates. The runner warms the model before the timed turns.
-The live assertions require a real model response, an MCP tool receipt, a second
-successful prompt in the same session, and cancellation during a blocking tool.
+Both modes accept an optional adapter argument; `maf` aliases
+`microsoft-agent-framework`. Each live adapter must produce a real model response,
+return an exact MCP tool receipt, continue the same session with a second
+successful prompt, and cancel during a blocking tool.
 Offline scenarios remain the deterministic failure and deadline checks.
 Readiness and inference errors fail the live run; CI does not skip live coverage
 based on repository secrets.
