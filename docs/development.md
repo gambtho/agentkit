@@ -124,14 +124,16 @@ The composed v2 checks build the current AgentKit frontend and agent images,
 layer Orka's production supervisor onto each immutable image, and exercise the
 real ACP, provider, and MCP paths. The normal PR/push offline matrix covers
 `pydantic-ai`, `microsoft-agent-framework`, and `langgraph` with deterministic
-local fixtures and no external model credentials. A separate live MAF lane uses
-Copilot through the digest-pinned Vekil image and requires real model, tool, and
-session-continuation results.
+local fixtures and no external model credentials. The live matrix covers the
+same three adapters against the digest-pinned AIKit Qwen3.5-2B image on CPU,
+requiring real model, tool, continuation, and blocking-tool cancellation results.
 
 ```sh
 scripts/orka-harness-v2-e2e.sh offline
 scripts/orka-harness-v2-e2e.sh offline langgraph
-VEKIL_CACHE_DIR="$HOME/.config/vekil" scripts/orka-harness-v2-e2e.sh live
+scripts/orka-harness-v2-e2e.sh live
+scripts/orka-harness-v2-e2e.sh live pydantic-ai
+scripts/orka-harness-v2-e2e.sh live langgraph
 ```
 
 Run these commands in a Linux shell on the Docker daemon's host, with a
@@ -139,56 +141,50 @@ daemon-backed Buildx builder and Go matching the pinned Orka module, currently G
 `55cb3d5232b4a9b697e72471e346c0a6493d4c21`. The runner fetches that exact revision;
 no pre-existing Orka checkout is needed. `BUILDER` selects the builder, and
 `PLATFORM` defaults to the Docker daemon's Linux amd64/arm64 architecture. Allow
-network access for registry images and build dependencies. For live mode,
-`COPILOT_GITHUB_TOKEN` can replace the local Vekil auth cache.
+network access for registry images and build dependencies. The model is bundled
+in the AIKit image; live inference runs on a run-owned Docker network without
+external API credentials.
 
 Set `ARTIFACT_DIR` to keep safe JSON results with the adapter, scenario, source
-and image digests, and failure diagnostics. Configured live authentication or
-inference failures fail the check; unavailable CI secret access produces an
-explicit skip. A skip does not establish live coverage. See
+and image digests, and failure diagnostics. Model startup and inference failures fail the check. The live CI lanes run on
+fork and Dependabot pull requests too; they do not depend on repository secrets. See
 [the v2 test guide](orka.md#test-the-composed-v2-runtime) for scenario assertions,
-session retirement rules, credentials, and cleanup behavior. The existing v1
+session retirement rules and cleanup behavior. The existing v1
 container and OpenAI HTTP smoke jobs remain independent checks.
 
 Validate the runner syntax and focused ACP input/output behavior locally:
 
 ```sh
 bash -n scripts/orka-harness-v2-e2e.sh
-shellcheck scripts/orka-harness-v2-e2e.sh
+shellcheck -x scripts/orka-harness-v2-e2e.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
 uv run --directory runtimes/common --extra dev pytest -q tests/test_acp_protocol.py tests/test_cli_protocol.py
 ```
 
-## Live Copilot/Vekil E2E
+## Live AIKit E2E
 
-The optional live job runs `scripts/live-copilot-agent-e2e.sh` when
-`COPILOT_GITHUB_TOKEN` is available and the run is allowed to access repository
-secrets. It uses `ghcr.io/sozercan/vekil:v0.14.10`, pinned by digest, to provide an
-OpenAI-compatible endpoint and validates a real built AgentKit container through
-`/v1/chat/completions`.
-
-For local workstation validation, the same script can also use an existing Vekil
-auth cache instead of a token. Leave `COPILOT_GITHUB_TOKEN` unset and set
-`VEKIL_CACHE_DIR` if your cache is not in `~/.config/vekil`:
+`scripts/live-aikit-agent-e2e.sh` runs real built agents for all three adapters
+against the prebuilt
+`ghcr.io/kaito-project/aikit/qwen3.5:2b` image, pinned by digest in
+`scripts/aikit-e2e-common.sh`. No model API key or auth cache is required.
 
 ```sh
-VEKIL_HOST_PORT=31339 \
+AIKIT_HOST_PORT=18089 \
 AGENTKIT_LIVE_HOST_PORT=18086 \
 TAG=e2e-script \
-scripts/live-copilot-agent-e2e.sh
+scripts/live-aikit-agent-e2e.sh
+
+# Select one adapter, or omit the argument to run all three with one model server.
+scripts/live-aikit-agent-e2e.sh pydantic-ai
+scripts/live-aikit-agent-e2e.sh langgraph
 ```
 
-When `PLATFORM` is unset, the script picks `linux/arm64` on arm64 Docker hosts
-and `linux/amd64` on amd64 hosts so locally built adapter images match the live
-agent image.
+When `PLATFORM` is unset, the script selects the Docker daemon's Linux amd64 or
+arm64 architecture. Both the model and agent use a run-owned network.
+Only the host-facing test ports are published on loopback.
 
-Fork PRs, Dependabot runs without secrets, and repos without the token/cache skip
-or fail before live provider calls while normal offline checks still run.
-
-## Foundry Hosted Agents fixture
-
-`AGENTKIT_PROTOCOL=foundry` now exposes Foundry Hosted Agents' `/readiness`,
-`/invocations`, and minimal `/responses` surfaces directly from every adapter
-image. `test/foundry-hosted-agent/` remains as a compatibility smoke fixture for
-older wrapping flows; AgentKit still owns `/agent/agent.yaml` and the runtime
-lifecycle in both modes.
+The CPU model configuration is in `test/aikit-e2e/model.yaml`. It bounds context,
+output, and CPU threads, disables reasoning, and uses greedy sampling while
+preserving native tool templates. Both live entrypoints cap CPU use at four CPUs or the daemon's available count,
+whichever is smaller, and warm the model before running timed agent turns. `AIKIT_IMAGE` can override the image for local testing;
+it must serve the same `qwen-3.5-2b` model. CI uses the checked-in digest.
