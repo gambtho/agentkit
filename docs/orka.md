@@ -215,7 +215,7 @@ keeps the history of up to `AGENTKIT_ORKA_MAX_SESSION_HISTORIES` sessions
 (default 256, never fewer than the runtime session limit) and drops the least
 recently used session without a live runtime first. Each session's history is
 capped at `AGENTKIT_ORKA_MAX_SESSION_HISTORY_BYTES` of text (default 1 MiB);
-past that, the oldest completed turns are dropped before the next turn runs.
+past that, the oldest completed turns are dropped.
 
 Runtimes start lazily on a session's first turn. If one fails to start, for
 example because a remote MCP tool rejects its credential, the turn fails with

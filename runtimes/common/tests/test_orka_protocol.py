@@ -926,9 +926,10 @@ def test_orka_lifespan_awaits_cancelled_turn_and_terminal_callback_before_runtim
         run_request,
         *,
         max_terminal_turns,
+        max_history_bytes,
         brokered_tools=None,
     ) -> None:
-        del turns, terminal_order, state, max_terminal_turns, brokered_tools
+        del turns, terminal_order, state, max_terminal_turns, max_history_bytes, brokered_tools
         await get_runtime(run_request)
         turn_started.set()
         await asyncio.Event().wait()
@@ -2569,6 +2570,20 @@ def test_orka_fatal_run_failure_rebuilds_runtime_and_keeps_history():
     assert (health["status"], health["ready"]) == ("ok", True)
 
 
+def test_orka_fatal_error_inside_exception_group_rebuilds_runtime():
+    fatal = AgentRunError("MCP tool protocol failed", code="MCPToolProtocolError", fatal=True)
+    broken = ScriptedRuntime(ExceptionGroup("parallel tools", [fatal]))
+    rebuilt = ScriptedRuntime("a2")
+    app = create_orka_app(_spec(), ScriptedFactory(broken, rebuilt), auth_token="test-token")
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["failed"]["reason"] == "MCPToolProtocolError"
+        assert _run_prompt(client, "turn-2", "q2")["type"] == "TurnCompleted"
+
+    assert broken.closed
+    assert [request.prompt for request in rebuilt.requests] == ["q2"]
+
+
 def test_orka_history_survives_failed_rebuild():
     broken = ScriptedRuntime("a1", AgentRunError("MCP tool protocol failed", code="MCPToolProtocolError", fatal=True))
     rebuilt = ScriptedRuntime("a4")
@@ -2629,6 +2644,7 @@ def test_orka_session_history_drops_oldest_turns_over_byte_budget():
     with TestClient(app) as client:
         for index in (1, 2, 3, 4):
             assert _run_prompt(client, f"turn-{index}", f"q{index}")["type"] == "TurnCompleted"
+        stored = tuple(client.app.state.session_histories["runtime-session-1"])
 
     def turns(*numbers: int) -> tuple[ConversationTurn, ...]:
         return tuple(
@@ -2637,8 +2653,9 @@ def test_orka_session_history_drops_oldest_turns_over_byte_budget():
             for turn in (ConversationTurn(role="user", text=f"q{number}"), ConversationTurn(role="assistant", text=f"a{number}"))
         )
 
-    # Each completed turn is 4 bytes; the fourth turn would exceed 10 bytes.
+    # Each completed turn is 4 bytes; a third stored turn would exceed 10 bytes.
     assert [request.history for request in session.requests] == [(), turns(1), turns(1, 2), turns(2, 3)]
+    assert stored == turns(3, 4)
 
 
 def test_orka_session_history_limit_never_drops_live_sessions():

@@ -1023,6 +1023,7 @@ async def _run_turn(
     run_request: RunRequest,
     *,
     max_terminal_turns: int,
+    max_history_bytes: int,
     brokered_tools: list[BrokeredToolDefinition] | None = None,
 ) -> None:
     active: ActiveRuntime | None = None
@@ -1093,6 +1094,8 @@ async def _run_turn(
         else:
             normalized = normalize_agent_run_error(exc)
             code, message = normalized.code or normalized.__class__.__name__, str(normalized)
+            if normalized.fatal and active is not None:
+                active.broken = True
         await _append_terminal_if_missing(
             state,
             terminal_order,
@@ -1149,6 +1152,7 @@ async def _run_turn(
         if completed and active is not None:
             active.history.append(ConversationTurn(role="user", text=run_request.prompt))
             active.history.append(ConversationTurn(role="assistant", text=result.text))
+            _trim_history(active.history, max_history_bytes)
     except _SSEFrameTooLargeError as exc:
         await _append_output_failure(
             state,
@@ -1316,11 +1320,9 @@ def create_orka_app(
 
     def session_history(runtime_session_id: str) -> list[ConversationTurn]:
         # Transcripts outlive runtimes, so a session keeps its conversation when
-        # its runtime is evicted for capacity or rebuilt. Trimming before each
-        # turn holds a stored transcript to its budget plus one turn.
+        # its runtime is evicted for capacity or rebuilt.
         history = session_histories.pop(runtime_session_id, [])
         session_histories[runtime_session_id] = history
-        _trim_history(history, history_byte_limit)
         return history
 
     def trim_session_histories(opening_session_id: str) -> None:
@@ -1485,6 +1487,7 @@ def create_orka_app(
                 state,
                 run_request,
                 max_terminal_turns=retention_limit,
+                max_history_bytes=history_byte_limit,
                 brokered_tools=brokered_tools,
             )
         )
