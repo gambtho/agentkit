@@ -2605,6 +2605,25 @@ def test_orka_session_history_retention_is_bounded():
     assert reopened.requests[0].history == ()
 
 
+def test_orka_session_history_drops_oldest_turns_over_byte_budget():
+    session = ScriptedRuntime("a1", "a2", "a3", "a4")
+    app = create_orka_app(_spec(), ScriptedFactory(session), auth_token="test-token", max_session_history_bytes=10)
+
+    with TestClient(app) as client:
+        for index in (1, 2, 3, 4):
+            assert _run_prompt(client, f"turn-{index}", f"q{index}")["type"] == "TurnCompleted"
+
+    def turns(*numbers: int) -> tuple[ConversationTurn, ...]:
+        return tuple(
+            turn
+            for number in numbers
+            for turn in (ConversationTurn(role="user", text=f"q{number}"), ConversationTurn(role="assistant", text=f"a{number}"))
+        )
+
+    # Each completed turn is 4 bytes; the fourth turn would exceed 10 bytes.
+    assert [request.history for request in session.requests] == [(), turns(1), turns(1, 2), turns(2, 3)]
+
+
 def test_orka_session_history_limit_never_drops_live_sessions():
     runtimes = [ScriptedRuntime(text) for text in ("a1", "b1", "c1")]
     app = create_orka_app(_spec(), ScriptedFactory(*runtimes), auth_token="test-token", max_runtime_sessions=2, max_session_histories=1)

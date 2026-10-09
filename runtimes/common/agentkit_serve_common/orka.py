@@ -67,9 +67,11 @@ _OUTPUT_LIMIT_CODE = "MaxOutputBytesExceeded"
 _DEFAULT_MAX_TERMINAL_TURNS = 256
 _DEFAULT_MAX_RUNTIME_SESSIONS = 64
 _DEFAULT_MAX_SESSION_HISTORIES = 256
+_DEFAULT_MAX_SESSION_HISTORY_BYTES = 1024 * 1024
 _MAX_TERMINAL_TURNS_ENV = "AGENTKIT_ORKA_MAX_TERMINAL_TURNS"
 _MAX_RUNTIME_SESSIONS_ENV = "AGENTKIT_ORKA_MAX_RUNTIME_SESSIONS"
 _MAX_SESSION_HISTORIES_ENV = "AGENTKIT_ORKA_MAX_SESSION_HISTORIES"
+_MAX_SESSION_HISTORY_BYTES_ENV = "AGENTKIT_ORKA_MAX_SESSION_HISTORY_BYTES"
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JSON_VALUE_ABSENT = object()
 # Go net/url.PathEscape leaves these reserved bytes unescaped in a path segment.
@@ -415,6 +417,24 @@ def _max_session_histories(value: int | None = None) -> int:
         default=_DEFAULT_MAX_SESSION_HISTORIES,
         field_name="max_session_histories",
     )
+
+
+def _max_session_history_bytes(value: int | None = None) -> int:
+    return _positive_int_setting(
+        value,
+        env_name=_MAX_SESSION_HISTORY_BYTES_ENV,
+        default=_DEFAULT_MAX_SESSION_HISTORY_BYTES,
+        field_name="max_session_history_bytes",
+    )
+
+
+def _trim_history(history: list[ConversationTurn], max_bytes: int) -> None:
+    """Drop the oldest completed turns until the transcript fits its budget."""
+    size = sum(len(turn.text.encode()) for turn in history)
+    while history and size > max_bytes:
+        # Turns are committed as user/assistant pairs; drop whole pairs.
+        size -= sum(len(turn.text.encode()) for turn in history[:2])
+        del history[:2]
 
 
 def _truthy_env(name: str) -> bool:
@@ -1147,6 +1167,7 @@ def create_orka_app(
     max_terminal_turns: int | None = None,
     max_runtime_sessions: int | None = None,
     max_session_histories: int | None = None,
+    max_session_history_bytes: int | None = None,
     enable_brokered_read: bool | None = None,
     enable_brokered_write: bool | None = None,
     enable_brokered_coordination: bool | None = None,
@@ -1159,6 +1180,7 @@ def create_orka_app(
     # Sessions with a live runtime always keep their transcripts, so a smaller
     # history limit could not be honored.
     history_limit = max(_max_session_histories(max_session_histories), runtime_session_limit)
+    history_byte_limit = _max_session_history_bytes(max_session_history_bytes)
     brokered_classes: set[str] = set()
     if _brokered_read_enabled(enable_brokered_read):
         brokered_classes.add(BROKERED_CLASS_READ)
@@ -1293,9 +1315,11 @@ def create_orka_app(
 
     def session_history(runtime_session_id: str) -> list[ConversationTurn]:
         # Transcripts outlive runtimes, so a session keeps its conversation when
-        # its runtime is evicted for capacity or rebuilt.
+        # its runtime is evicted for capacity or rebuilt. Trimming before each
+        # turn holds a stored transcript to its budget plus one turn.
         history = session_histories.pop(runtime_session_id, [])
         session_histories[runtime_session_id] = history
+        _trim_history(history, history_byte_limit)
         return history
 
     def trim_session_histories(opening_session_id: str) -> None:
