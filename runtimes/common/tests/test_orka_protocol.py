@@ -2602,6 +2602,37 @@ def test_orka_history_survives_failed_rebuild():
     )
 
 
+def test_orka_failed_start_does_not_store_or_evict_history():
+    reopened = ScriptedRuntime("a2")
+    factory = ScriptedFactory(ScriptedRuntime("a1"), FailingStartRuntime(RuntimeError("tool unreachable")), reopened)
+    app = create_orka_app(_spec(), factory, auth_token="test-token", max_runtime_sessions=1, max_session_histories=1)
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
+        failed = _run_prompt(client, "turn-2", "o1", runtime_session_id="runtime-session-2")
+        stored = list(client.app.state.session_histories)
+        assert _run_prompt(client, "turn-3", "q2")["type"] == "TurnCompleted"
+
+    assert failed["failed"]["reason"] == "RuntimeStartFailed"
+    assert stored == ["runtime-session-1"]
+    assert reopened.requests[0].history == (
+        ConversationTurn(role="user", text="q1"),
+        ConversationTurn(role="assistant", text="a1"),
+    )
+
+
+def test_orka_runtime_build_failure_reports_runtime_start_failed():
+    class FailingFactory:
+        def build_runtime(self, spec: AgentSpec) -> RuntimeSession:
+            raise RuntimeError("client setup failed for https://tool.example/mcp?key=private-key")
+
+    app = create_orka_app(_spec(), FailingFactory(), auth_token="test-token")
+    with TestClient(app) as client:
+        terminal = _run_prompt(client, "turn-1", "q1")
+
+    assert terminal["failed"] == {"reason": "RuntimeStartFailed", "message": "runtime failed to start", "retryable": False}
+
+
 def test_orka_history_survives_runtime_capacity_eviction():
     first = ScriptedRuntime("a1")
     other = ScriptedRuntime("b1")

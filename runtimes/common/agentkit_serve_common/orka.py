@@ -1320,20 +1320,20 @@ def create_orka_app(
 
     def session_history(runtime_session_id: str) -> list[ConversationTurn]:
         # Transcripts outlive runtimes, so a session keeps its conversation when
-        # its runtime is evicted for capacity or rebuilt.
-        history = session_histories.pop(runtime_session_id, [])
+        # its runtime is evicted for capacity or rebuilt. A new session is only
+        # stored once its runtime starts, so failed starts add no entries.
+        history = session_histories.pop(runtime_session_id, None)
+        if history is None:
+            return []
         session_histories[runtime_session_id] = history
         return history
 
-    def trim_session_histories(opening_session_id: str) -> None:
-        # Runs after runtime capacity is reserved, so a session whose runtime
-        # was just evicted counts as idle. Live sessions keep their transcripts.
+    def store_session_history(runtime_session_id: str, history: list[ConversationTurn]) -> None:
+        session_histories[runtime_session_id] = history
+        # The session's runtime is live by now, and any runtime evicted to make
+        # room is not, so only idle sessions are dropped to fit the limit.
         overflow = len(session_histories) - history_limit
-        idle = [
-            session_id
-            for session_id in session_histories
-            if session_id != opening_session_id and session_id not in active_runtimes
-        ]
+        idle = [session_id for session_id in session_histories if session_id not in active_runtimes]
         for session_id in idle[: max(overflow, 0)]:
             del session_histories[session_id]
 
@@ -1355,13 +1355,12 @@ def create_orka_app(
             await close_runtime(runtime_session_id, active)
         await wait_for_runtime_session_close(runtime_session_id)
         await reserve_runtime_slot()
-        trim_session_histories(runtime_session_id)
         # Runtime factories read the process environment today. Keep this scoped
         # section on the event loop thread so cancellation cannot leave a worker
         # thread running with turn credentials in process-global os.environ.
         with _scoped_process_env(run_request.env):
-            context = factory.build_runtime(spec)
             try:
+                context = factory.build_runtime(spec)
                 session = await context.__aenter__()
             except (AgentBuildError, AgentRunError):
                 raise
@@ -1377,6 +1376,7 @@ def create_orka_app(
         active = ActiveRuntime(context=context, session=session, env=dict(run_request.env), history=history)
         active_runtimes[runtime_session_id] = active
         runtime_order.append(runtime_session_id)
+        store_session_history(runtime_session_id, history)
         return active
 
     @asynccontextmanager
