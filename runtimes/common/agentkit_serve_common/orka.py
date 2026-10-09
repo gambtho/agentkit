@@ -1362,7 +1362,7 @@ def create_orka_app(
             try:
                 context = factory.build_runtime(spec)
                 session = await context.__aenter__()
-            except (AgentBuildError, AgentRunError):
+            except AgentBuildError:
                 raise
             except asyncio.CancelledError as exc:
                 current = asyncio.current_task()

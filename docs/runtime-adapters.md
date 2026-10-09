@@ -91,7 +91,9 @@ URLs, and echoed credentials, so it never reaches the client:
 | Model returned another 4xx, or the request failed in transport | 502 | `ModelUpstreamError` |
 | MCP transport or protocol failure | 502 | `MCPToolProtocolError` |
 | Orka runtime session failed to start | 503 | `RuntimeStartFailed` |
-| Any other framework failure | 502 | `AgentRunFailed` |
+| LangGraph result has no messages list or assistant message | 502 | `LangGraphResultError` |
+| LangGraph graph is not initialized | 500 | `AgentNotInitialized` |
+| Other unclassified framework or SDK exception | 502 | `AgentRunFailed` |
 
 Foundry mode reports the same model codes with its `upstream_status` field; it
 reports other run failures as `RuntimeFailure` with a fixed message. Orka mode

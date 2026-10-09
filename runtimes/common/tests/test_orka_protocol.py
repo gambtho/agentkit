@@ -2524,6 +2524,10 @@ class FailingStartRuntime(ScriptedRuntime):
     "error",
     [
         pytest.param(RuntimeError("401 for url https://tool.example/mcp?key=private-key"), id="exception"),
+        pytest.param(
+            AgentRunError("tool startup failed with private-key", status=502, code="MCPToolProtocolError"),
+            id="agent-run-error",
+        ),
         pytest.param(asyncio.CancelledError("Cancelled via cancel scope"), id="leaked-task-group-cancel"),
     ],
 )
@@ -2621,16 +2625,40 @@ def test_orka_failed_start_does_not_store_or_evict_history():
     )
 
 
-def test_orka_runtime_build_failure_reports_runtime_start_failed():
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("client setup failed for https://tool.example/mcp?key=private-key"),
+        AgentRunError("tool startup failed with private-key", status=502, code="MCPToolProtocolError"),
+    ],
+)
+def test_orka_runtime_build_failure_reports_runtime_start_failed(error, caplog):
     class FailingFactory:
         def build_runtime(self, spec: AgentSpec) -> RuntimeSession:
-            raise RuntimeError("client setup failed for https://tool.example/mcp?key=private-key")
+            raise error
 
     app = create_orka_app(_spec(), FailingFactory(), auth_token="test-token")
     with TestClient(app) as client:
         terminal = _run_prompt(client, "turn-1", "q1")
 
     assert terminal["failed"] == {"reason": "RuntimeStartFailed", "message": "runtime failed to start", "retryable": False}
+    assert "private-key" not in caplog.text
+
+
+def test_orka_runtime_build_failure_preserves_configuration_guidance():
+    class FailingFactory:
+        def build_runtime(self, spec: AgentSpec) -> RuntimeSession:
+            raise orka_module.AgentBuildError("required model env var is missing")
+
+    app = create_orka_app(_spec(), FailingFactory(), auth_token="test-token")
+    with TestClient(app) as client:
+        terminal = _run_prompt(client, "turn-1", "q1")
+
+    assert terminal["failed"] == {
+        "reason": "AgentBuildError",
+        "message": "required model env var is missing",
+        "retryable": False,
+    }
 
 
 def test_orka_history_survives_runtime_capacity_eviction():
