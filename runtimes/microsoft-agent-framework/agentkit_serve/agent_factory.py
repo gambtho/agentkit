@@ -442,19 +442,25 @@ class _MCPFailureMiddleware(FunctionMiddleware):
             raise MiddlewareTermination("MCP tool protocol failed") from None
 
 
+# The current run's request history, which _RequestHistoryProvider loads.
+_request_history: ContextVar[tuple[Message, ...]] = ContextVar("agentkit_maf_request_history", default=())
+
+
 class _RequestHistoryProvider(HistoryProvider):
     """Make each run's request history the only conversation the model sees.
 
     MAF injects an in-memory history provider into session-backed runs unless a
-    loading history provider is registered. That stored copy would replace the
-    history the protocol layer sends, so register one that loads and keeps nothing.
+    loading history provider is registered, and that stored copy would replace
+    the history the protocol layer sends. Loading the request history here, not
+    passing it as run input, also keeps context providers that persist input
+    messages, such as Foundry memory, to the new turn.
     """
 
     def __init__(self) -> None:
         super().__init__("agentkit-request-history", store_inputs=False, store_outputs=False)
 
     async def get_messages(self, session_id, *, state=None, **kwargs) -> list[Message]:  # noqa: ANN001, ANN003
-        return []
+        return list(_request_history.get())
 
     async def save_messages(self, session_id, messages, *, state=None, **kwargs) -> None:  # noqa: ANN001, ANN003
         return None
@@ -849,14 +855,13 @@ def _result_usage(result: object) -> dict[str, int]:
     }
 
 
-def _to_messages(request: RunRequest) -> list[Message]:
-    """Map a neutral RunRequest to MAF messages."""
-    messages: list[Message] = []
-    for turn in request.history:
-        if turn.role in FORWARDED_ROLES and turn.text:
-            messages.append(Message(role=turn.role, contents=[turn.text]))
-    messages.append(Message(role="user", contents=[request.prompt]))
-    return messages
+def _history_messages(request: RunRequest) -> tuple[Message, ...]:
+    """Map a neutral RunRequest's prior turns to MAF messages."""
+    return tuple(
+        Message(role=turn.role, contents=[turn.text])
+        for turn in request.history
+        if turn.role in FORWARDED_ROLES and turn.text
+    )
 
 
 class _ToolEventMiddleware(FunctionMiddleware):
@@ -897,12 +902,13 @@ async def run_agent(
     session: AgentSession | None = None,
 ) -> RunResult:
     """Run the MAF agent and return the neutral result shape."""
-    messages = _to_messages(request)
+    messages = [Message(role="user", contents=[request.prompt])]
     kwargs = {}
     if request.on_tool_event is not None:
         kwargs["middleware"] = [_ToolEventMiddleware(request.on_tool_event)]
     failure = _RunFailure()
     token = _run_failure.set(failure)
+    history_token = _request_history.set(_history_messages(request))
 
     async def execute():
         return await agent.run(messages, session=session, **kwargs)
@@ -928,3 +934,4 @@ async def run_agent(
     finally:
         failure.signal.cancel()
         _run_failure.reset(token)
+        _request_history.reset(history_token)
