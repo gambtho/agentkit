@@ -220,23 +220,27 @@ def test_normalize_agent_run_error_keeps_runtime_owned_errors():
     assert support.normalize_agent_run_error(group) is fatal
 
 
-def test_mcp_tool_protocol_error_is_fatal_only_for_closed_stdio_sessions():
+def test_mcp_tool_protocol_error_is_fatal_only_when_the_session_is_gone():
     class ErrorData:
-        code = -32000
+        def __init__(self, code: int, message: str) -> None:
+            self.code = code
+            self.message = message
 
     class McpError(Exception):
-        error = ErrorData()
+        def __init__(self, code: int, message: str) -> None:
+            super().__init__(message)
+            self.error = ErrorData(code, message)
 
-    closed = McpError("Connection closed")
     wrapped_closed = RuntimeError("tool failed")
     wrapped_closed.__context__ = anyio.ClosedResourceError()
-    timeout = TimeoutError("read timed out")
+    gone = (McpError(-32000, "Connection closed"), McpError(32600, "Session terminated"), wrapped_closed)
+    recoverable = (McpError(-32000, "upstream database unavailable"), TimeoutError("read timed out"))
 
-    for exc in (closed, wrapped_closed):
-        err = support.mcp_tool_protocol_error(exc, stdio=True)
+    for exc in gone:
+        err = support.mcp_tool_protocol_error(exc)
         assert (err.code, str(err), err.fatal) == ("MCPToolProtocolError", "MCP tool protocol failed", True)
-        assert not support.mcp_tool_protocol_error(exc, stdio=False).fatal
-    assert not support.mcp_tool_protocol_error(timeout, stdio=True).fatal
+    for exc in recoverable:
+        assert not support.mcp_tool_protocol_error(exc).fatal
 
 
 def _remote_tool(**overrides) -> ToolSpec:

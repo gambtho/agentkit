@@ -321,7 +321,7 @@ class _MCPCallBoundary:
         except Exception as exc:
             # Do not attach upstream exceptions: framework tool logging and
             # detailed-error options must never expose transport credentials.
-            error = mcp_tool_protocol_error(exc, stdio=isinstance(self, MCPStdioTool))
+            error = mcp_tool_protocol_error(exc)
             raise _MCPProtocolError(error) from None
 
     async def _call_tool_with_retries(self, tool_name, filtered_kwargs, meta, parser, span):

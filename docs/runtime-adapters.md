@@ -150,9 +150,11 @@ startup credentials at runtime initialization; they are not rebuilt for every tu
 - tool sessions are entered once for the app lifespan and reused across requests,
 - an admitted MCP tool error returns to the model as a fixed failure result,
   never the tool's own error text,
-- a stdio tool session that closes is fatal: OpenAI `/healthz` and Foundry
-  `/readiness` start failing so the platform replaces the container, and Orka
-  mode rebuilds that runtime session for its next turn,
+- a tool session that is gone for good is fatal, whether a stdio subprocess
+  exited or a remote server no longer knows the session: OpenAI `/healthz` and
+  Foundry `/readiness` start failing so the platform replaces the container, and
+  Orka mode rebuilds that runtime session for its next turn. A server's error
+  for one call is not fatal,
 - remote MCP clients inject headers only for the configured origin and do not
   follow redirects with credentials.
 

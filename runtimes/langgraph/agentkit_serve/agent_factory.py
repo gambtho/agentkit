@@ -129,9 +129,8 @@ def build_mcp_connection(tool: ToolSpec) -> dict[str, Any]:
 class _MCPSessionBoundary:
     """End the run on MCP transport/protocol failures without upstream detail."""
 
-    def __init__(self, session: Any, *, stdio: bool) -> None:
+    def __init__(self, session: Any) -> None:
         self._session = session
-        self._stdio = stdio
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._session, name)
@@ -140,7 +139,7 @@ class _MCPSessionBoundary:
         try:
             return await self._session.call_tool(*args, **kwargs)
         except Exception as exc:
-            raise mcp_tool_protocol_error(exc, stdio=self._stdio) from None
+            raise mcp_tool_protocol_error(exc) from None
 
 
 class _InvalidToolCallMiddleware(AgentMiddleware):
@@ -232,7 +231,7 @@ class LangGraphRuntime:
             session = await self.stack.enter_async_context(session_cm)
             await asyncio.wait_for(session.initialize(), timeout=_mcp_init_timeout())
             loaded = await load_mcp_tools(
-                _MCPSessionBoundary(session, stdio=not tool.url_env),
+                _MCPSessionBoundary(session),
                 server_name=tool.name,
                 tool_name_prefix=True,
             )

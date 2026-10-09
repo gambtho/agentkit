@@ -23,7 +23,6 @@ error normalization live in ``agentkit_serve_common.adapter_support``.
 
 from __future__ import annotations
 
-import functools
 from types import TracebackType
 from typing import Any, AsyncIterable
 
@@ -105,9 +104,7 @@ def build_model(spec: AgentSpec) -> OpenAIChatModel:
     )
 
 
-async def _process_mcp_tool_call(
-    ctx: Any, call_tool: Any, name: str, args: dict[str, Any], *, stdio: bool = False
-) -> Any:
+async def _process_mcp_tool_call(ctx: Any, call_tool: Any, name: str, args: dict[str, Any]) -> Any:
     try:
         return await call_tool(name, args)
     except ToolError:
@@ -120,11 +117,11 @@ async def _process_mcp_tool_call(
         _, remaining = exc.split(ToolError)
         if remaining is None:
             raise ModelRetry("MCP tool execution failed") from None
-        raise mcp_tool_protocol_error(remaining, stdio=stdio) from None
+        raise mcp_tool_protocol_error(remaining) from None
     except Exception as exc:
         # Recent Pydantic AI versions also retry JSON-RPC errors by default.
         # Authorization, protocol and transport failures must end this run.
-        raise mcp_tool_protocol_error(exc, stdio=stdio) from None
+        raise mcp_tool_protocol_error(exc) from None
 
 
 def build_tool_server(tool: ToolSpec) -> Any:
@@ -186,7 +183,7 @@ def build_tool_server(tool: ToolSpec) -> Any:
         init_timeout=timeout,
         read_timeout=timeout,
         tool_error_behavior="error",
-        process_tool_call=functools.partial(_process_mcp_tool_call, stdio=True),
+        process_tool_call=_process_mcp_tool_call,
     ).prefixed(tool.name)
 
 

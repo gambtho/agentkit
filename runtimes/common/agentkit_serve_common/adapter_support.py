@@ -578,31 +578,35 @@ def _is_transport_error(exc: BaseException) -> bool:
     return any(klass.__name__ in {"TransportError", "APIConnectionError"} for klass in type(exc).__mro__)
 
 
-# mcp.types.CONNECTION_CLOSED; the shared core cannot import the MCP SDK.
-_MCP_CONNECTION_CLOSED = -32000
+# Errors the MCP client generates itself when its session is gone: the read
+# stream ended (mcp.types.CONNECTION_CLOSED), or a remote server answered 404
+# for the session. The shared core cannot import the MCP SDK. Matching the
+# message too keeps a server's own -32000 error for one call from counting.
+_MCP_SESSION_GONE = {(-32000, "Connection closed"), (32600, "Session terminated")}
 
 
 def mcp_session_closed(exc: BaseException) -> bool:
-    """Whether an MCP client failure means its transport is gone for good."""
+    """Whether an MCP client failure means its session is gone for good."""
     for cur in _exception_chain(exc):
         if isinstance(cur, (anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream)):
             return True
-        if type(cur).__name__ == "McpError" and getattr(getattr(cur, "error", None), "code", None) == _MCP_CONNECTION_CLOSED:
+        error = getattr(cur, "error", None)
+        if type(cur).__name__ == "McpError" and (getattr(error, "code", None), getattr(error, "message", None)) in _MCP_SESSION_GONE:
             return True
     return False
 
 
-def mcp_tool_protocol_error(exc: BaseException | None = None, *, stdio: bool = False) -> AgentRunError:
+def mcp_tool_protocol_error(exc: BaseException | None = None) -> AgentRunError:
     """Secret-free run error for an MCP failure that is not an admitted tool error.
 
-    Stdio tool sessions are entered once for the runtime lifespan, so a closed
-    stdio transport is fatal; remote tools reconnect per request.
+    Every adapter enters its MCP sessions once for the runtime lifespan, stdio
+    and remote alike, so a session that is gone for good is fatal.
     """
-    fatal = stdio and exc is not None and mcp_session_closed(exc)
+    fatal = exc is not None and mcp_session_closed(exc)
     # Remote tool errors can carry credential-bearing URLs; log the type only.
     logger.warning(
         "MCP tool protocol failed: %s%s",
         type(exc).__name__ if exc is not None else "unexpected tool result",
-        " (stdio session closed)" if fatal else "",
+        " (session closed)" if fatal else "",
     )
     return AgentRunError("MCP tool protocol failed", status=502, code="MCPToolProtocolError", fatal=fatal)
