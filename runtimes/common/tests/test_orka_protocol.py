@@ -2549,3 +2549,57 @@ def test_orka_fatal_run_failure_rebuilds_runtime_and_keeps_history():
         ConversationTurn(role="assistant", text="a1"),
     )
     assert (health["status"], health["ready"]) == ("ok", True)
+
+
+def test_orka_history_survives_failed_rebuild():
+    broken = ScriptedRuntime("a1", AgentRunError("MCP tool protocol failed", code="MCPToolProtocolError", fatal=True))
+    rebuilt = ScriptedRuntime("a4")
+    factory = ScriptedFactory(broken, FailingStartRuntime(RuntimeError("tool unreachable")), rebuilt)
+    app = create_orka_app(_spec(), factory, auth_token="test-token")
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-2", "q2")["failed"]["reason"] == "MCPToolProtocolError"
+        assert _run_prompt(client, "turn-3", "q3")["failed"]["reason"] == "RuntimeStartFailed"
+        assert _run_prompt(client, "turn-4", "q4")["type"] == "TurnCompleted"
+
+    assert rebuilt.requests[0].history == (
+        ConversationTurn(role="user", text="q1"),
+        ConversationTurn(role="assistant", text="a1"),
+    )
+
+
+def test_orka_history_survives_runtime_capacity_eviction():
+    first = ScriptedRuntime("a1")
+    other = ScriptedRuntime("b1")
+    reopened = ScriptedRuntime("a2")
+    app = create_orka_app(_spec(), ScriptedFactory(first, other, reopened), auth_token="test-token", max_runtime_sessions=1)
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-2", "o1", runtime_session_id="runtime-session-2")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-3", "q2")["type"] == "TurnCompleted"
+
+    assert first.closed
+    assert reopened.requests[0].history == (
+        ConversationTurn(role="user", text="q1"),
+        ConversationTurn(role="assistant", text="a1"),
+    )
+
+
+def test_orka_session_history_retention_is_bounded():
+    app = create_orka_app(
+        _spec(),
+        ScriptedFactory(ScriptedRuntime("a1"), ScriptedRuntime("b1"), ScriptedRuntime("c1"), reopened := ScriptedRuntime("a2")),
+        auth_token="test-token",
+        max_runtime_sessions=1,
+        max_session_histories=1,
+    )
+
+    with TestClient(app) as client:
+        assert _run_prompt(client, "turn-1", "q1")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-2", "o1", runtime_session_id="runtime-session-2")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-3", "p1", runtime_session_id="runtime-session-3")["type"] == "TurnCompleted"
+        assert _run_prompt(client, "turn-4", "q2")["type"] == "TurnCompleted"
+
+    assert reopened.requests[0].history == ()

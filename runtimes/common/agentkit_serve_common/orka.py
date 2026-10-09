@@ -66,8 +66,10 @@ _SSE_DATA_PREFIX = "data: "
 _OUTPUT_LIMIT_CODE = "MaxOutputBytesExceeded"
 _DEFAULT_MAX_TERMINAL_TURNS = 256
 _DEFAULT_MAX_RUNTIME_SESSIONS = 64
+_DEFAULT_MAX_SESSION_HISTORIES = 256
 _MAX_TERMINAL_TURNS_ENV = "AGENTKIT_ORKA_MAX_TERMINAL_TURNS"
 _MAX_RUNTIME_SESSIONS_ENV = "AGENTKIT_ORKA_MAX_RUNTIME_SESSIONS"
+_MAX_SESSION_HISTORIES_ENV = "AGENTKIT_ORKA_MAX_SESSION_HISTORIES"
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JSON_VALUE_ABSENT = object()
 # Go net/url.PathEscape leaves these reserved bytes unescaped in a path segment.
@@ -86,7 +88,8 @@ class ActiveRuntime:
     session: Any
     env: dict[str, str]
     # Orka sends only the new prompt, so the harness owns each runtime session's
-    # committed user/assistant transcript, as the ACP child does.
+    # committed user/assistant transcript, as the ACP child does. The list is
+    # shared with the app's transcript store, which outlives this runtime.
     history: list[ConversationTurn] = field(default_factory=list)
     # A fatal run failure means the next turn must rebuild this runtime.
     broken: bool = False
@@ -402,6 +405,15 @@ def _max_runtime_sessions(value: int | None = None) -> int:
         env_name=_MAX_RUNTIME_SESSIONS_ENV,
         default=_DEFAULT_MAX_RUNTIME_SESSIONS,
         field_name="max_runtime_sessions",
+    )
+
+
+def _max_session_histories(value: int | None = None) -> int:
+    return _positive_int_setting(
+        value,
+        env_name=_MAX_SESSION_HISTORIES_ENV,
+        default=_DEFAULT_MAX_SESSION_HISTORIES,
+        field_name="max_session_histories",
     )
 
 
@@ -1134,6 +1146,7 @@ def create_orka_app(
     *,
     max_terminal_turns: int | None = None,
     max_runtime_sessions: int | None = None,
+    max_session_histories: int | None = None,
     enable_brokered_read: bool | None = None,
     enable_brokered_write: bool | None = None,
     enable_brokered_coordination: bool | None = None,
@@ -1143,6 +1156,7 @@ def create_orka_app(
         raise ValueError("Orka mode requires a bearer auth token")
     retention_limit = _max_terminal_turns(max_terminal_turns)
     runtime_session_limit = _max_runtime_sessions(max_runtime_sessions)
+    history_limit = _max_session_histories(max_session_histories)
     brokered_classes: set[str] = set()
     if _brokered_read_enabled(enable_brokered_read):
         brokered_classes.add(BROKERED_CLASS_READ)
@@ -1157,6 +1171,8 @@ def create_orka_app(
     terminal_order: list[str] = []
     active_runtimes: dict[str, ActiveRuntime] = {}
     runtime_order: list[str] = []
+    # Ordered least recently used first.
+    session_histories: dict[str, list[ConversationTurn]] = {}
     background_tasks: set[asyncio.Task[None]] = set()
     runtime_close_tasks: set[asyncio.Task[BaseException | None]] = set()
     runtime_close_tasks_by_session: dict[str, asyncio.Task[BaseException | None]] = {}
@@ -1273,10 +1289,27 @@ def create_orka_app(
             if evicted is not None:
                 await close_runtime(evict_id, evicted)
 
+    def session_history(runtime_session_id: str) -> list[ConversationTurn]:
+        # Transcripts outlive runtimes, so a session keeps its conversation when
+        # its runtime is evicted for capacity or rebuilt. Only transcripts of
+        # sessions without a live runtime are dropped to stay within the limit.
+        history = session_histories.pop(runtime_session_id, [])
+        session_histories[runtime_session_id] = history
+        overflow = len(session_histories) - history_limit
+        if overflow > 0:
+            idle = [
+                session_id
+                for session_id in session_histories
+                if session_id != runtime_session_id and session_id not in active_runtimes
+            ]
+            for session_id in idle[:overflow]:
+                del session_histories[session_id]
+        return history
+
     async def get_runtime(run_request: RunRequest) -> ActiveRuntime:
         runtime_session_id = run_request.session_id or ""
+        history = session_history(runtime_session_id)
         active = active_runtimes.get(runtime_session_id)
-        history: list[ConversationTurn] = []
         if active is not None:
             if active.env == dict(run_request.env) and not active.broken:
                 if runtime_session_id in runtime_order:
@@ -1285,8 +1318,6 @@ def create_orka_app(
                 return active
             if close_failure := new_runtime_close_failure():
                 raise close_failure
-            # Rebuilding the runtime keeps the session's conversation.
-            history = active.history
             active_runtimes.pop(runtime_session_id, None)
             if runtime_session_id in runtime_order:
                 runtime_order.remove(runtime_session_id)

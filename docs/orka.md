@@ -207,8 +207,13 @@ Orka sends only the new prompt for each turn. AgentKit keeps the completed
 user/assistant turns of each `runtimeSessionID` and passes them to the runtime as
 history, so every runtime adapter continues a session the same way. Failed and
 cancelled turns are not added. If a run reports a fatal runtime failure, such as
-a stdio MCP tool subprocess exiting, the next turn in that runtime session builds
-a fresh runtime with the same history.
+an MCP tool session closing, the next turn in that runtime session builds a
+fresh runtime with the same history. History is kept apart from runtimes, so a
+session also keeps it when its runtime is evicted for capacity
+(`AGENTKIT_ORKA_MAX_RUNTIME_SESSIONS`, default 64) or fails to restart. AgentKit
+keeps the history of up to `AGENTKIT_ORKA_MAX_SESSION_HISTORIES` sessions
+(default 256), dropping the least recently used session without a live runtime
+first.
 
 Runtimes start lazily on a session's first turn. If one fails to start, for
 example because a remote MCP tool rejects its credential, the turn fails with
