@@ -532,6 +532,11 @@ def _exception_chain(exc: BaseException):
             pending.append(nested)
 
 
+def exception_types(exc: BaseException) -> str:
+    """Credential-free summary of an exception: the types in its chain."""
+    return " <- ".join(type(cur).__name__ for cur in _exception_chain(exc))
+
+
 def upstream_status_code(exc: BaseException, *, default: int = 502) -> int:
     """Best-effort upstream HTTP status from a framework/model exception.
 

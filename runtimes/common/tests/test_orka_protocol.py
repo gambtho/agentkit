@@ -2517,7 +2517,8 @@ def test_orka_runtime_start_failure_hides_startup_detail(error, caplog):
 
     assert terminal["type"] == "TurnFailed"
     assert terminal["failed"] == {"reason": "RuntimeStartFailed", "message": "runtime failed to start", "retryable": False}
-    assert "runtime session failed to start" in caplog.text
+    assert f"runtime session failed to start: {type(error).__name__}" in caplog.text
+    assert "private-key" not in caplog.text
 
 
 def test_orka_unexpected_run_exception_text_is_not_streamed():

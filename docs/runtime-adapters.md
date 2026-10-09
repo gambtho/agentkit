@@ -96,7 +96,8 @@ URLs, and echoed credentials, so it never reaches the client:
 Foundry mode reports the same model codes with its `upstream_status` field, and
 Orka mode reports them in `TurnFailed` frames. Operators get a warning log for
 each failure: the HTTP status for model HTTP errors, whose bodies may echo
-credentials; the exception type for MCP failures; and a traceback otherwise.
+credentials; the exception types for MCP failures and Orka runtime startup
+failures; and a traceback otherwise.
 
 ## Model endpoint compatibility
 

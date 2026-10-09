@@ -217,8 +217,8 @@ recently used session without a live runtime first.
 
 Runtimes start lazily on a session's first turn. If one fails to start, for
 example because a remote MCP tool rejects its credential, the turn fails with
-`RuntimeStartFailed` and the cause goes only to the AgentKit log, since tool
-clients put credential-bearing URLs and upstream bodies in startup errors.
+`RuntimeStartFailed`. Tool clients put credential-bearing URLs and upstream
+bodies in startup errors, so the AgentKit log records only the exception types.
 Configuration errors such as a missing env var keep their own message.
 
 Current AgentKit Serve Orka support is **observed mode by default**. The default

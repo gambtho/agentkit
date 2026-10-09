@@ -25,7 +25,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .adapter_support import AgentBuildError, normalize_agent_run_error
+from .adapter_support import AgentBuildError, exception_types, normalize_agent_run_error
 from .config import AgentSpec
 from .conversation import ConversationTurn, RunRequest
 from .runtime import (
@@ -988,9 +988,9 @@ class OrkaToolBroker:
 
 
 def _runtime_start_error(exc: BaseException) -> AgentRunError:
-    # Tool and model clients put URLs and upstream bodies in startup errors, so
-    # only operators see them.
-    logger.warning("runtime session failed to start", exc_info=exc)
+    # Tool and model clients put credential-bearing URLs and upstream bodies in
+    # startup errors, so operators get the exception types only.
+    logger.warning("runtime session failed to start: %s", exception_types(exc))
     return AgentRunError("runtime failed to start", status=503, code="RuntimeStartFailed")
 
 

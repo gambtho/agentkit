@@ -696,14 +696,16 @@ def test_parity_crashed_stdio_tool_fails_health():
             assert client.get("/readiness").status_code == 503
 
 
-def test_parity_orka_runtime_startup_failure_hides_tool_credentials():
-    """Orka builds runtimes per turn, so startup errors reach the turn's frames."""
+def test_parity_orka_runtime_startup_failure_hides_tool_credentials(caplog):
+    """Orka builds runtimes per turn, so startup errors reach the turn's frames and logs."""
     with _harness(rejecting_remote_tool=True) as (provider, spec), _orka(spec) as client:
         frames = _orka_turn(client, "hi")
 
     assert frames[-1]["type"] == "TurnFailed"
     assert frames[-1]["failed"] == {"reason": "RuntimeStartFailed", "message": "runtime failed to start", "retryable": False}
     assert provider.requests == []
+    assert "runtime session failed to start" in caplog.text
+    _assert_no_canary(caplog.text)
 
 
 def test_parity_orka_rebuilds_runtime_after_crashed_stdio_tool():
