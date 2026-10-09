@@ -10,12 +10,17 @@ on:
     paths-ignore:
       - ".codex/**"
       - ".claude/**"
+  # Runtime dependencies float within their declared ranges, so a nightly run
+  # surfaces upstream releases that change behavior without blaming a PR.
+  schedule:
+    - cron: "23 7 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # The event name keeps a nightly run on main from cancelling a push run.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -207,6 +212,67 @@ jobs:
       - name: Build Python wheel
         working-directory: ${{ matrix.path }}
         run: .venv/bin/python -m build --wheel
+
+  # Images and the job above install the newest releases in each declared range;
+  # this proves the declared lower bounds still work, parity suite included.
+  python-lowest:
+    name: Python lowest dependencies (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: common
+            path: runtimes/common
+          - package: pydantic-ai adapter
+            path: runtimes/pydantic-ai
+          - package: microsoft-agent-framework adapter
+            path: runtimes/microsoft-agent-framework
+          - package: langgraph adapter
+            path: runtimes/langgraph
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Setup Go for common wire interoperability
+        if: matrix.path == 'runtimes/common'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: test/agentsessions/go.mod
+          cache-dependency-path: test/agentsessions/go.sum
+
+      - name: Install lowest declared direct dependencies
+        working-directory: ${{ matrix.path }}
+        run: |
+          set -euxo pipefail
+          uv venv --python 3.12 .venv
+          # One resolution, so the shared core's own lower bounds apply too.
+          packages=()
+          if [ "${{ matrix.path }}" != "runtimes/common" ]; then
+            packages+=(-e ../common)
+          fi
+          prerelease_args=()
+          if [ "${{ matrix.path }}" = "runtimes/microsoft-agent-framework" ]; then
+            prerelease_args+=(--prerelease=allow)
+          fi
+          uv pip install --python .venv/bin/python --resolution lowest-direct \
+            "${prerelease_args[@]}" "${packages[@]}" -e ".[dev]"
+          uv pip list --python .venv/bin/python
+
+      - name: Run Python tests
+        working-directory: ${{ matrix.path }}
+        run: .venv/bin/python -m pytest -q
 
   container-build:
     name: Container build and offline smoke

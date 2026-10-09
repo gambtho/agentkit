@@ -89,6 +89,19 @@ python -m build --wheel
 For `runtimes/common`, omit `-e ../common` and compile/test
 `agentkit_serve_common` directly.
 
+Images and the main Python job install the newest release in each declared
+dependency range. CI also runs every package's tests at the lowest declared
+direct versions, so a lower bound that no longer works fails the build, and the
+whole workflow runs nightly to catch upstream releases that change behavior. To
+reproduce the lowest-version run:
+
+```sh
+cd runtimes/langgraph
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --resolution lowest-direct -e ../common -e '.[dev]'
+.venv/bin/python -m pytest -q
+```
+
 Python tests cover:
 
 - ABI reader validation,
