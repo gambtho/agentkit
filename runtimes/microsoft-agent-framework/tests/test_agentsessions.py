@@ -220,11 +220,14 @@ def _assert_ambient_telemetry_is_protocol_local(binding):
             log for log in logs.get_finished_logs()
             if log.instrumentation_scope.name == "agent_framework"
         ]
-        assert normal_logs
-        payload = repr([(log.log_record.body, log.log_record.attributes) for log in normal_logs])
-        assert all(marker in payload for marker in [
-            "normal-input-marker", "normal-output-marker", "private-instructions-marker",
-        ]), payload
+        # Older supported SDKs export spans/metrics but lack message-event logs.
+        # Keep that capability's positive control strict when it is available.
+        if getattr(OBSERVABILITY_SETTINGS, "enable_message_events", False):
+            assert normal_logs
+            payload = repr([(log.log_record.body, log.log_record.attributes) for log in normal_logs])
+            assert all(marker in payload for marker in [
+                "normal-input-marker", "normal-output-marker", "private-instructions-marker",
+            ]), payload
 
     try:
         asyncio.run(check())

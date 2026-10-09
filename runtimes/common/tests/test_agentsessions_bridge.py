@@ -44,6 +44,7 @@ def test_bridge_roundtrip_is_authenticated_text_only_and_no_usage():
             task = asyncio.create_task(client.post("chat/completions", json=payload()))
             event = await asyncio.wait_for(exchange.events.get(), 3)
             assert [(m.role, "".join(p.text.text for p in m.parts)) for m in event.model.messages] == [("system", "rules"), ("user", ""), ("assistant", ""), ("user", "latest")]
+            exchange.mark_emitted(event.model.id)
             exchange.accept(h.ModelResult(model_call_id=event.model.id, message=message(), usage=c.Usage(model="host-model", input_tokens=123)))
             response = await task
             assert response.status_code == 200
@@ -71,6 +72,7 @@ def test_owned_client_authorization_collapses_ambient_headers(headers):
                 task = asyncio.create_task(client.post("chat/completions", headers=headers, json=payload()))
                 event = await asyncio.wait_for(exchange.events.get(), 3)
                 assert event.kind == c.EVENT_MODEL_CALL
+                exchange.mark_emitted(event.model.id)
                 exchange.accept(h.ModelResult(model_call_id=event.model.id, message=message()))
                 response = await task
                 assert response.status_code == 200
@@ -127,6 +129,7 @@ def test_stream_true_buffers_full_result_then_terminal_sse_without_usage():
             task = asyncio.create_task(client.post("chat/completions", json=payload(stream=True)))
             event = await asyncio.wait_for(exchange.events.get(), 3)
             assert not task.done()
+            exchange.mark_emitted(event.model.id)
             exchange.accept(h.ModelResult(model_call_id=event.model.id, message=message("full text")))
             response = await task
             assert response.headers["content-type"].startswith("text/event-stream")
@@ -159,6 +162,7 @@ def test_encoded_response_expansion_is_bounded(stream):
         async with live() as (exchange, client, _):
             task = asyncio.create_task(client.post("chat/completions", json=payload(stream=stream)))
             event = await asyncio.wait_for(exchange.events.get(), 3)
+            exchange.mark_emitted(event.model.id)
             exchange.accept(h.ModelResult(model_call_id=event.model.id, message=message("\x00" * (200 * 1024))))
             response = await task
             assert response.status_code == 502
@@ -328,6 +332,7 @@ def test_concurrent_requests_refused_instead_of_unbounded_effect_queue():
             second = await client.post("chat/completions", json=payload())
             assert second.status_code == 409
             assert exchange.events.empty()
+            exchange.mark_emitted(event.model.id)
             exchange.accept(h.ModelResult(model_call_id=event.model.id, message=message()))
             assert (await first).status_code == 200
     asyncio.run(check())
