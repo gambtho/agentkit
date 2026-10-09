@@ -20,6 +20,8 @@ runtimes=("$@")
 
 model_key="sk-parity-container-canary"
 auth_token="parity-smoke-token"
+# A hung model call or SSE stream fails the scenario instead of the CI job.
+request_timeout=120
 network="agentkit-parity-$$"
 fixture="agentkit-parity-fixture-$$"
 containers=()
@@ -52,7 +54,7 @@ serve_image() {
 wait_for() {
   local url="$1"
   for _ in $(seq 1 90); do
-    curl -fsS "$url" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 5 "$url" >/dev/null 2>&1 && return 0
     sleep 1
   done
   return 1
@@ -75,7 +77,7 @@ check() {
 
 openai_scenarios() {
   local base="$1" label="$2" out status
-  local auth=(-H "Authorization: Bearer $auth_token" -H "Content-Type: application/json")
+  local auth=(--max-time "$request_timeout" -H "Authorization: Bearer $auth_token" -H "Content-Type: application/json")
   out="$(curl -sS "${auth[@]}" "$base/v1/chat/completions" -d '{"messages":[{"role":"user","content":"plain:P1"}]}')"
   check "$label plain" '.choices[0].message.content == "parity-answer: P1"' "$out"
   out="$(curl -sS "${auth[@]}" "$base/v1/chat/completions" -d '{"messages":[{"role":"user","content":"tool:T1"}]}')"
@@ -88,7 +90,7 @@ openai_scenarios() {
 
 foundry_scenarios() {
   local base="$1" label="$2" out status
-  local auth=(-H "Authorization: Bearer $auth_token" -H "Content-Type: application/json")
+  local auth=(--max-time "$request_timeout" -H "Authorization: Bearer $auth_token" -H "Content-Type: application/json")
   out="$(curl -sS "${auth[@]}" "$base/responses" -d '{"input":"plain:P2"}')"
   check "$label plain" '.output[0].content[0].text == "parity-answer: P2"' "$out"
   out="$(curl -sS "${auth[@]}" "$base/responses" -d '{"input":"tool:T2"}')"
@@ -108,9 +110,9 @@ orka_turn() {
     deadline: $deadline, authIdentity: {subject: "system:serviceaccount:default:orka"},
     input: {prompt: $prompt, contextRefs: [], env: []}, toolExecutionMode: "observed", metadata: {}
   }')"
-  curl -fsS -H "Authorization: Bearer $auth_token" -H "Content-Type: application/json" \
+  curl -fsS --max-time "$request_timeout" -H "Authorization: Bearer $auth_token" -H "Content-Type: application/json" \
     "$base/v1/turns" -d "$payload" >/dev/null
-  curl -fsS -H "Authorization: Bearer $auth_token" "$base/v1/turns/$turn/events" |
+  curl -fsS --max-time "$request_timeout" -H "Authorization: Bearer $auth_token" "$base/v1/turns/$turn/events" |
     sed -n 's/^data: //p' | tail -n 1
 }
 
@@ -179,7 +181,7 @@ main() {
 wait_for_fixture() {
   local url="$1"
   for _ in $(seq 1 60); do
-    curl -sS -o /dev/null "$url/v1/chat/completions" 2>/dev/null && return 0
+    curl -sS --max-time 5 -o /dev/null "$url/v1/chat/completions" 2>/dev/null && return 0
     sleep 1
   done
   return 1

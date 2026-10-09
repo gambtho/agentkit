@@ -124,7 +124,7 @@ The CI Docker job builds:
 1. the frontend image,
 2. all three adapter images,
 3. a fixture agent image for each runtime,
-4. each generated agent enough to pass `/healthz`,
+4. each generated agent far enough to pass `/healthz`,
 5. one generated agent in `AGENTKIT_PROTOCOL=orka` mode far enough to prove the
    native harness health/capabilities, bearer auth, turn acceptance, and SSE
    terminal-frame shape, and
