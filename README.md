@@ -346,11 +346,12 @@ long-lived signing key is used. This applies to the published `agentkit`,
 you build from them. Releases published before signing was enabled have no
 signature from this workflow.
 
-With cosign and Docker Buildx installed, select a signed release image (replace
-`<version>` with its release version):
+With cosign v3 (v3.0.6 or newer) and Docker Buildx installed, select a signed
+release image (replace `<version>` with its release version). The workflow uses
+cosign v3's bundle format and OCI referring artifacts for signatures:
 
 ```sh
-IMAGE=ghcr.io/orka-agents/agentkit/serve-pydantic-ai:v<version>
+IMAGE='ghcr.io/orka-agents/agentkit/serve-pydantic-ai:v<version>'
 
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/orka-agents/agentkit/\.github/workflows/release\.yml@refs/tags/v[0-9][0-9A-Za-z_.-]*$' \
