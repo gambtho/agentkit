@@ -89,6 +89,12 @@ async def serve(binding, *, bind="127.0.0.1", port=8080, auth_token=None, runner
 def run(binding, *, bind="127.0.0.1", port=8080, auth_token=None, runner=None): ...
 ```
 
+The returned server preserves the gRPC server API. `stop()` waits for execution
+cleanup even when its caller is canceled. `wait_for_termination()` includes that
+cleanup and retains its timeout result without canceling the shutdown. Stopping
+before the first start is a no-op, as in native gRPC. Public TCP port binding
+also enforces the nonloopback authentication gate; Unix sockets are local-only.
+
 CLI recognizes only the optional adapter `async run_agentsessions(binding,
 request, exchange) -> RunResult | None` hook. This extends the internal PR1
 hook; no adapter shipped its earlier two-argument form. There is **no fallback
