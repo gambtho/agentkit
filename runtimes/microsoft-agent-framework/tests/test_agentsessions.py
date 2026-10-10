@@ -32,7 +32,7 @@ def text(role, value):
 
 @pytest.fixture
 def bake(tmp_path, monkeypatch):
-    def build(**extra):
+    def build(*, model=None, **extra):
         data = {
             "abiVersion": "v0",
             "metadata": {"name": "host-bound"},
@@ -48,6 +48,7 @@ def bake(tmp_path, monkeypatch):
             "expose": {"openai": True, "port": 8080},
             **extra,
         }
+        data["model"].update(model or {})
         path = tmp_path / "agent.yaml"
         path.write_bytes(yaml.safe_dump(data).encode())
         monkeypatch.setenv(
@@ -290,7 +291,7 @@ def test_actual_sdk_preserves_history_empty_input_boundaries_and_opaque_config(b
     "Authorization: Bearer unrelated-ambient-token",
     "authorization: Bearer unrelated-ambient-token\naUtHoRiZaTiOn: Bearer another-ambient-token",
 ])
-def test_fresh_local_sdk_per_start_ignores_provider_proxy_and_ambient_auth(binding, monkeypatch, ambient_headers):
+def test_fresh_local_sdk_per_start_ignores_provider_proxy_and_ambient_auth(bake, monkeypatch, ambient_headers):
     async def check():
         hits, clients, agents, requests = [], [], [], []
         async def trap(reader, writer):
@@ -299,7 +300,7 @@ def test_fresh_local_sdk_per_start_ignores_provider_proxy_and_ambient_auth(bindi
             await writer.wait_closed()
         server = await asyncio.start_server(trap, "127.0.0.1", 0)
         url = "http://127.0.0.1:" + str(server.sockets[0].getsockname()[1]) + "/v1"
-        binding.spec.model.base_url = url
+        binding = bake(model={"baseURL": url})
         for key in ["OPENAI_BASE_URL", "AZURE_OPENAI_ENDPOINT", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
             monkeypatch.setenv(key, url)
         monkeypatch.setenv("NO_PROXY", "")
@@ -557,11 +558,11 @@ def test_baked_tools_and_context_are_refused_before_adapter_build(bake, extra):
         bake(**extra)
 
 
-def test_sdk_debug_diagnostics_do_not_export_execution_content(binding, caplog):
+def test_sdk_debug_diagnostics_do_not_export_execution_content(bake, caplog):
     logger = logging.getLogger("openai._base_client")
     caplog.set_level(logging.DEBUG, logger="openai")
     filters = list(logger.filters)
-    binding.spec.instructions = "private-sdk-instructions-marker"
+    binding = bake(instructions="private-sdk-instructions-marker")
 
     async def check():
         history = [c.Event(kind=c.EVENT_INPUT, message=text("user", "private-sdk-history-marker"))]

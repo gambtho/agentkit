@@ -54,8 +54,9 @@ def binding_file(tmp_path, monkeypatch):
     monkeypatch.delenv("LANGGRAPH_PROVIDER_KEY", raising=False)
     monkeypatch.setenv("AGENTKIT_AGENTSESSIONS_IMPLEMENTATION_DIGEST", "sha256:" + "c" * 64)
 
-    def load(**changes):
+    def load(*, model=None, **changes):
         data.update(changes)
+        data["model"].update(model or {})
         path.write_bytes(yaml.safe_dump(data).encode())
         monkeypatch.setenv(
             "AGENTKIT_AGENTSESSIONS_AGENT_CONFIGURATION_DIGEST",
@@ -160,10 +161,10 @@ def test_actual_sdk_preserves_ordered_empty_turns_and_opaque_config(binding_file
 
 
 @pytest.mark.parametrize("model_name", ["o1", "o1-mini", "o1-preview", "o3", "host-model"])
-def test_actual_sdk_preserves_baked_model_without_implicit_options(binding, model_name):
+def test_actual_sdk_preserves_baked_model_without_implicit_options(binding_file, model_name):
     # o1 defaults temperature to 1 and o-series rewrites system to developer;
     # neither extra options nor developer roles belong to the strict text profile.
-    binding.spec.model.name = model_name
+    binding = binding_file(model={"name": model_name})
 
     async def check():
         async with live(binding) as stub:
@@ -189,8 +190,8 @@ def test_empty_host_completion_is_not_retried_or_duplicated(binding):
 
 @pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("nested", [False, True])
-def test_global_console_settings_stay_enabled_without_exporting_agentsessions(binding, capsys, debug, nested):
-    binding.spec.instructions = "private-baked-instructions-marker"
+def test_global_console_settings_stay_enabled_without_exporting_agentsessions(binding_file, capsys, debug, nested):
+    binding = binding_file(instructions="private-baked-instructions-marker")
     previous_debug, previous_verbose = get_debug(), get_verbose()
     set_debug(debug)
     set_verbose(True)
@@ -231,11 +232,11 @@ def test_global_console_settings_stay_enabled_without_exporting_agentsessions(bi
         set_verbose(previous_verbose)
 
 
-def test_parent_graph_checkpoints_do_not_persist_agentsessions(binding):
+def test_parent_graph_checkpoints_do_not_persist_agentsessions(binding_file):
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import StateGraph
 
-    binding.spec.instructions = "private-baked-instructions-marker"
+    binding = binding_file(instructions="private-baked-instructions-marker")
     saver = InMemorySaver()
 
     async def runner(binding, request, exchange):
@@ -289,7 +290,7 @@ class PoisonCache(BaseCache):
     "Authorization: Bearer unrelated-ambient-token",
     "authorization: Bearer unrelated-ambient-token\naUtHoRiZaTiOn: Bearer another-ambient-token",
 ])
-def test_fresh_resources_ignore_ambient_provider_proxy_auth_tracing_and_cache(binding, monkeypatch, ambient_headers):
+def test_fresh_resources_ignore_ambient_provider_proxy_auth_tracing_and_cache(binding_file, monkeypatch, ambient_headers):
     async def check():
         hits, clients, models, graphs, traces, requests = [], [], [], [], [], []
 
@@ -300,7 +301,7 @@ def test_fresh_resources_ignore_ambient_provider_proxy_auth_tracing_and_cache(bi
 
         server = await asyncio.start_server(trap, "127.0.0.1", 0)
         url = "http://127.0.0.1:" + str(server.sockets[0].getsockname()[1]) + "/v1"
-        binding.spec.model.base_url = url
+        binding = binding_file(model={"baseURL": url})
         for name in ["OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "LANGSMITH_ENDPOINT", "LANGCHAIN_ENDPOINT"]:
             monkeypatch.setenv(name, url)
         for name in ["OPENAI_API_KEY", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID", "LANGSMITH_API_KEY"]:
@@ -618,11 +619,11 @@ def test_unsupported_start_content_and_options_emit_no_model_effect(binding, sta
     asyncio.run(check())
 
 
-def test_sdk_debug_diagnostics_do_not_export_execution_content(binding, caplog):
+def test_sdk_debug_diagnostics_do_not_export_execution_content(binding_file, caplog):
     logger = logging.getLogger("openai._base_client")
     caplog.set_level(logging.DEBUG, logger="openai")
     filters = list(logger.filters)
-    binding.spec.instructions = "private-sdk-instructions-marker"
+    binding = binding_file(instructions="private-sdk-instructions-marker")
 
     async def check():
         history = [c.Event(kind=c.EVENT_INPUT, message=text("user", "private-sdk-history-marker"))]
