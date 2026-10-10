@@ -100,6 +100,12 @@ handlers; off-thread or unsupported-loop callers retain their prior signal
 behavior. Cleanup has no forced deadline: deployment grace periods and
 uncatchable SIGKILL can still terminate the process before teardown finishes.
 
+The returned server preserves the gRPC server API. `stop()` waits for execution
+cleanup even when its caller is canceled. `wait_for_termination()` includes that
+cleanup and retains its timeout result without canceling the shutdown. Stopping
+before the first start is a no-op, as in native gRPC. Public TCP port binding
+also enforces the nonloopback authentication gate; Unix sockets are local-only.
+
 ModelResult must correlate to the single pending call. Unsolicited/duplicate or
 mismatched replies, missing message payloads, non-assistant/nontext content,
 oversized results, negative usage or a different usage model fail with
@@ -120,7 +126,8 @@ Each hook owns a fresh ephemeral `127.0.0.1` HTTP bridge with a fresh bearer tok
 SDK client and framework agent/graph. Clients and listener requests close before
 admission is released. The shared core remains framework-neutral; adapters opt
 in through `async run_agentsessions(binding, request, exchange) -> RunResult |
-None`. Missing hooks fail closed rather than calling `build_runtime`.
+None`. Missing hooks fail closed rather than calling `build_runtime`; there is
+no callback-in-metadata or environment-selected model bridge.
 
 | Runtime | Restricted execution path |
 |---|---|
