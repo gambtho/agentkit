@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import hashlib
 import json
 import os
@@ -219,11 +220,14 @@ def _assert_ambient_telemetry_is_protocol_local(binding):
             log for log in logs.get_finished_logs()
             if log.instrumentation_scope.name == "agent_framework"
         ]
-        assert normal_logs
-        payload = repr([(log.log_record.body, log.log_record.attributes) for log in normal_logs])
-        assert all(marker in payload for marker in [
-            "normal-input-marker", "normal-output-marker", "private-instructions-marker",
-        ]), payload
+        # Older supported SDKs export spans/metrics but lack message-event logs.
+        # Keep that capability's positive control strict when it is available.
+        if getattr(OBSERVABILITY_SETTINGS, "enable_message_events", False):
+            assert normal_logs
+            payload = repr([(log.log_record.body, log.log_record.attributes) for log in normal_logs])
+            assert all(marker in payload for marker in [
+                "normal-input-marker", "normal-output-marker", "private-instructions-marker",
+            ]), payload
 
     try:
         asyncio.run(check())
@@ -551,3 +555,29 @@ def test_unsupported_start_is_refused_before_any_sdk_effect(binding, monkeypatch
 def test_baked_tools_and_context_are_refused_before_adapter_build(bake, extra):
     with pytest.raises(AgentsessionsConfigurationError):
         bake(**extra)
+
+
+def test_sdk_debug_diagnostics_do_not_export_execution_content(binding, caplog):
+    logger = logging.getLogger("openai._base_client")
+    caplog.set_level(logging.DEBUG, logger="openai")
+    filters = list(logger.filters)
+    binding.spec.instructions = "private-sdk-instructions-marker"
+
+    async def check():
+        history = [c.Event(kind=c.EVENT_INPUT, message=text("user", "private-sdk-history-marker"))]
+        async with live(binding) as stub:
+            _, end = await turn(
+                stub, inputs=["private-sdk-input-marker"], history=history,
+                reply="private-sdk-output-marker",
+            )
+            assert end[0].end.state == "COMPLETED"
+
+    asyncio.run(check())
+    assert not any(marker in "\n".join(caplog.messages) for marker in [
+        "private-sdk-instructions-marker", "private-sdk-history-marker",
+        "private-sdk-input-marker", "private-sdk-output-marker",
+    ])
+    assert logger.filters == filters
+    assert logger.getEffectiveLevel() == logging.DEBUG
+    logger.debug("ordinary-sdk-debug-control")
+    assert "ordinary-sdk-debug-control" in caplog.messages

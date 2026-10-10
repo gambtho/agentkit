@@ -829,6 +829,7 @@ async def run_agentsessions(
     from openai import AsyncOpenAI
 
     from agentkit_serve_common.agentsessions.bridge import loopback_bridge
+    from agentkit_serve_common.agentsessions.diagnostics import suppress_sdk_diagnostics
 
     # The native service supplies validated, ordered user/assistant turns.
     # Empty text is authoritative, unlike the other protocols' conversion.
@@ -840,8 +841,13 @@ async def run_agentsessions(
         # drops this contentless system sentinel, emitting messages=[] rather
         # than manufacturing an empty user Input.
         messages.append(Message(role="system", contents=[]))
-    async with loopback_bridge(exchange) as local:
-        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as http:
+    async with AsyncExitStack() as scope:
+        scope.enter_context(suppress_sdk_diagnostics())
+        local = await scope.enter_async_context(loopback_bridge(exchange))
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            event_hooks={"request": [local.authorize_request]},
+        ) as http:
             async with AsyncOpenAI(
                 base_url=local.base_url, api_key=local.token,
                 organization="", project="", http_client=http,
