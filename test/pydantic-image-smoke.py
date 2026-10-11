@@ -13,6 +13,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 
@@ -104,26 +105,46 @@ def main() -> None:
         return
     if not args.image:
         parser.error("an adapter or generated agent image is required")
-    # Stdin carries only this test's source; no host environment is forwarded.
-    subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "--platform",
-            args.platform,
-            "--entrypoint",
-            "/opt/agentkit/bin/python",
-            args.image,
-            "-",
-            "--inside",
-        ],
-        input=Path(__file__).read_text(),
-        text=True,
-        check=True,
-        timeout=420,
-    )
+    name = f"agentkit-image-smoke-{uuid.uuid4().hex}"
+    try:
+        # Stdin carries only this test's source; no host environment is forwarded.
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "--name",
+                name,
+                "-i",
+                "--platform",
+                args.platform,
+                "--entrypoint",
+                "/opt/agentkit/bin/python",
+                args.image,
+                "-",
+                "--inside",
+            ],
+            input=Path(__file__).read_text(),
+            text=True,
+            check=True,
+            timeout=420,
+        )
+    finally:
+        # A host timeout kills the Docker client, not its daemon-managed child.
+        failure = sys.exception()
+        try:
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception as cleanup_error:
+            if failure is None:
+                raise
+            print(
+                f"Container cleanup failed for {name}: {cleanup_error}", file=sys.stderr
+            )
 
 
 if __name__ == "__main__":
