@@ -70,6 +70,7 @@ jobs:
             bash -n "$script"
           done
           python3 -m py_compile test/foundry-hosted-agent/foundry_live.py deploy/foundry/scripts/verify_brokered_transcript.py
+          python3 -m py_compile test/langgraph-image-smoke.py
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -341,6 +342,10 @@ jobs:
           make build-test-agent TAG=ci BUILDER=
           make build-test-agent TAG=ci BUILDER= RUNTIME=maf
           make build-test-agent TAG=ci BUILDER= RUNTIME=langgraph
+
+      - name: Check LangGraph image and real stdio MCP tools
+        run: |
+          python3 test/langgraph-image-smoke.py langgraph-agent:ci
 
       - name: Smoke test built agent images
         run: |
