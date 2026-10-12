@@ -138,7 +138,7 @@ def main() -> None:
         )
     finally:
         # A host timeout kills the Docker client, not its daemon-managed child.
-        failure = sys.exception()
+        failure = sys.exc_info()[1]
         try:
             subprocess.run(
                 ["docker", "rm", "-f", name],
