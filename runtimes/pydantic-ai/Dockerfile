@@ -6,13 +6,13 @@
 FROM cgr.dev/chainguard/wolfi-base@sha256:1c451d46a0d5c4e9f2b38e0e8d3e299564a1aa95c21973efcc1980a9d1d2e73e AS runtime-system
 
 # Both installation and execution use the same interpreter/library closure.
-# Wolfi's versioned uv package supplies uv and uvx without a moving image tag.
+# Keep compatibility series without pinning APK revisions that can age out.
 RUN apk add --no-cache \
-        python-3.12-base=3.12.15-r3 \
-        nodejs-24=24.21.0-r4 \
-        npm-12=12.2.0-r2 \
-        uv=0.13.0-r0 \
-        ca-certificates=20260909-r2 \
+        python-3.12-base \
+        nodejs-24 \
+        npm-12 \
+        uv \
+        ca-certificates \
     && addgroup -g 1000 agentkit \
     && adduser -D -u 1000 -G agentkit -s /sbin/nologin agentkit \
     && mkdir -p /agent /usr/local/bin \
@@ -21,7 +21,7 @@ RUN apk add --no-cache \
     && ln -s /usr/bin/python3.12 /usr/local/bin/python3
 
 FROM runtime-system AS installer
-RUN apk add --no-cache py3.12-pip=26.2.1-r4
+RUN apk add --no-cache py3.12-pip
 WORKDIR /src
 COPY runtimes/common/pyproject.toml runtimes/common/README.md ./common/
 COPY runtimes/common/agentkit_serve_common ./common/agentkit_serve_common

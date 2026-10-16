@@ -47,6 +47,8 @@ jobs:
           bash -n scripts/live-aikit-agent-e2e.sh
           bash -n scripts/aikit-e2e-common.sh
           shellcheck -x scripts/live-aikit-agent-e2e.sh scripts/aikit-e2e-common.sh
+          bash -n scripts/live-task-evals.sh
+          shellcheck -x scripts/live-task-evals.sh
           bash -n scripts/orka-harness-v2-e2e.sh
           shellcheck -x scripts/orka-harness-v2-e2e.sh
           bash -n scripts/parity-container-smoke.sh
@@ -69,7 +71,9 @@ jobs:
             deploy/foundry/scripts/local_brokered_conformance_container.sh; do
             bash -n "$script"
           done
+          python3 -m py_compile test/maf-image-smoke.py
           python3 -m py_compile test/foundry-hosted-agent/foundry_live.py deploy/foundry/scripts/verify_brokered_transcript.py test/pydantic-image-smoke.py
+          python3 -m py_compile test/langgraph-image-smoke.py
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -215,6 +219,10 @@ jobs:
             echo "No package-local tests for ${{ matrix.package }}; compile and wheel checks cover it."
           fi
 
+      - name: Run live eval stdlib unit tests
+        if: matrix.path == 'runtimes/common'
+        run: python3 -m unittest discover -s test/evals -p 'test_*.py'
+
       - name: Build Python wheel
         working-directory: ${{ matrix.path }}
         run: .venv/bin/python -m build --wheel
@@ -344,6 +352,14 @@ jobs:
 
       - name: Check Pydantic image and stdio MCP tools
         run: python3 test/pydantic-image-smoke.py hello-agent:ci
+
+      - name: Check LangGraph image and real stdio MCP tools
+        run: |
+          python3 test/langgraph-image-smoke.py langgraph-agent:ci
+
+      - name: Verify MAF image and real stdio MCP tools
+        run: |
+          python3 test/maf-image-smoke.py maf-agent:ci
 
       - name: Smoke test built agent images
         run: |
@@ -506,14 +522,20 @@ jobs:
       - name: Prove keyless agentsessions journal and replay
         run: |
           set -euo pipefail
-          make build-test-agent TAG=ci BUILDER= \
-            FIXTURE=test/agentsessions/Agentkitfile.yaml \
-            AGENT_IMAGE=agentkit-agentsessions-text:ci
-          AGENTKIT_AGENTSESSIONS_IMAGE=agentkit-agentsessions-text:ci \
-            scripts/agentsessions-e2e.sh --skip-build
-          cd test/agentsessions
-          AGENTKIT_AGENTSESSIONS_IMAGE=agentkit-agentsessions-text:ci \
-            go test -v -count=1 -run '^TestRunnerSignalCleanup$' ./...
+          # Keep runtime rows separate from commands that may consume stdin.
+          while read -r -u 3 runtime fixture image; do
+            make build-test-agent TAG=ci BUILDER= RUNTIME="$runtime" \
+              FIXTURE="test/agentsessions/$fixture" AGENT_IMAGE="$image"
+            AGENTKIT_AGENTSESSIONS_IMAGE="$image" \
+              scripts/agentsessions-e2e.sh --skip-build "$runtime"
+            (cd test/agentsessions && \
+              AGENTKIT_AGENTSESSIONS_IMAGE="$image" AGENTKIT_AGENTSESSIONS_RUNTIME="$runtime" \
+              go test -v -count=1 -run '^TestRunner(SignalCleanup|RuntimeSelection)$' ./...)
+          done 3<<'RUNTIMES'
+          pydantic-ai Agentkitfile.yaml agentkit-agentsessions-text:ci
+          microsoft-agent-framework Agentkitfile-maf.yaml agentkit-agentsessions-maf-text:ci
+          langgraph Agentkitfile-langgraph.yaml agentkit-agentsessions-langgraph-text:ci
+          RUNTIMES
 
       - name: Container parity smoke
         env:
