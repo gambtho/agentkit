@@ -23,10 +23,12 @@ error normalization live in ``agentkit_serve_common.adapter_support``.
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Any, AsyncIterable
 
-from pydantic_ai import Agent, ModelRetry
+from pydantic import ValidationError
+from pydantic_ai import Agent, ModelRetry, ToolFailed, UnexpectedModelBehavior
 
 try:  # pydantic-ai 1.x
     from pydantic_ai.mcp import MCPServerStdio
@@ -64,6 +66,7 @@ from agentkit_serve_common.agentsessions import ExecutionExchange, VerifiedAgent
 from agentkit_serve_common.config import AgentSpec, ToolSpec
 from agentkit_serve_common.conversation import RunRequest, ToolCallEvent
 from agentkit_serve_common.runtime import (
+    AgentRunError,
     OfflineEchoRuntimeFactory,
     RunResult,
     RuntimeSession,
@@ -109,15 +112,16 @@ async def _process_mcp_tool_call(ctx: Any, call_tool: Any, name: str, args: dict
     try:
         return await call_tool(name, args)
     except ToolError:
-        # FastMCP raises ToolError only for an admitted isError result. Preserve
-        # model recovery for that case, without forwarding upstream diagnostics.
-        raise ModelRetry("MCP tool execution failed") from None
+        # An admitted isError is a completed tool failure, not an SDK argument
+        # correction. Let the model choose its next action without consuming the
+        # validation retry budget or forwarding upstream diagnostics.
+        raise ToolFailed("MCP tool execution failed") from None
     except ExceptionGroup as exc:
         # FastMCP can group completed tool errors during session teardown.
         # Mixed protocol/transport failures must still stop the run.
         _, remaining = exc.split(ToolError)
         if remaining is None:
-            raise ModelRetry("MCP tool execution failed") from None
+            raise ToolFailed("MCP tool execution failed") from None
         raise mcp_tool_protocol_error(remaining) from None
     except Exception as exc:
         # Recent Pydantic AI versions also retry JSON-RPC errors by default.
@@ -263,6 +267,7 @@ async def run_agentsessions(
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
     from agentkit_serve_common.agentsessions.bridge import loopback_bridge
+    from agentkit_serve_common.agentsessions.diagnostics import suppress_sdk_diagnostics
 
     # Unlike the other protocols' conversion, empty turns are authoritative.
     history = [
@@ -275,13 +280,17 @@ async def run_agentsessions(
         # SDK run(None) may adopt an existing assistant response. An empty
         # request forces an invocation without manufacturing an empty user turn.
         history.append(ModelRequest(parts=[]))
-    async with loopback_bridge(exchange) as local:
-        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as http:
+    async with AsyncExitStack() as scope:
+        scope.enter_context(suppress_sdk_diagnostics())
+        local = await scope.enter_async_context(loopback_bridge(exchange))
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            event_hooks={"request": [local.authorize_request]},
+        ) as http:
             async with AsyncOpenAI(
                 base_url=local.base_url, api_key=local.token,
                 organization="", project="", http_client=http,
-                # Explicit Authorization excludes ambient OPENAI_CUSTOM_HEADERS
-                # overrides, including differently cased authorization names.
+                # The HTTP hook also removes differently cased ambient auth.
                 default_headers={"Authorization": "Bearer " + local.token},
                 # The host owns effect completion/cancellation, not an
                 # unjournaled wall-clock read deadline. Bound loopback connect.
@@ -402,5 +411,18 @@ async def run_agent(agent: Agent, request: RunRequest, *, instructions: str = ""
     try:
         result = await agent.run(request.prompt, **run_options)
     except Exception as exc:  # noqa: BLE001 — normalized for the façade
+        if isinstance(exc, UnexpectedModelBehavior):
+            retry_cause = exc.__cause__
+            retry_limit = isinstance(retry_cause, ModelRetry)
+            if isinstance(retry_cause, ValidationError):
+                # Provider response parsing also raises ValidationError. Admit
+                # only the SDK's explicit tool correction-budget diagnostic.
+                diagnostic = str(exc)
+                retry_limit = diagnostic.startswith("Tool '") and " exceeded max retries count of " in diagnostic
+            if retry_limit:
+                # Keep the category without exposing SDK/model diagnostics.
+                raise AgentRunError(
+                    "agent retry limit exceeded", status=502, code="AgentRetryLimitExceeded"
+                ) from None
         raise normalize_agent_run_error(exc) from exc
     return RunResult(text=_result_text(result), usage=_result_usage(result))
